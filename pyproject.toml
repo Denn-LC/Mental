@@ -1,0 +1,22 @@
+[project]
+name = "mental"
+version = "0.1.0"
+description = "Mental maths trainer that teaches efficient patterns"
+readme = "README.md"
+authors = [
+    { name = "Denn-LC", email = "212485238+Denn-LC@users.noreply.github.com" }
+]
+requires-python = ">=3.14"
+dependencies = []
+
+[project.scripts]
+mental = "mental:main"
+
+[build-system]
+requires = ["uv_build>=0.12.19,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
