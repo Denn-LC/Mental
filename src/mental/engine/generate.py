@@ -30,10 +30,10 @@ def make_question(category, difficulty, seed):
     )
 
 
-def make_questions(categories, difficulty, count, seed=None):
-    """count questions, each from a random one of categories that has questions at this level."""
-    usable = [c for c in categories if strategies_for(c, difficulty)]
-    if not usable:
-        raise ValueError(f"no questions for {', '.join(categories)} at level {difficulty}")
+def make_questions(categories, difficulties, count, seed=None):
+    """count questions, each from a random (category, level) pair that has questions."""
+    pairs = [(c, d) for c in categories for d in difficulties if strategies_for(c, d)]
+    if not pairs:
+        raise ValueError(f"no questions for {', '.join(categories)} at level {difficulties}")
     rng = random.Random(seed)
-    return [make_question(rng.choice(usable), difficulty, rng.randrange(2**32)) for _ in range(count)]
+    return [make_question(*rng.choice(pairs), rng.randrange(2**32)) for _ in range(count)]

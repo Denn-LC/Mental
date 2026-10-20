@@ -27,6 +27,16 @@ def test_difficulty_out_of_range_is_422():
     assert client.get("/api/questions", params={"difficulty": 4}).status_code == 422
 
 
+def test_mixed_difficulty_mixes_levels():
+    response = client.get("/api/questions", params={"difficulty": "mixed", "count": 200})
+    assert response.status_code == 200
+    assert {q["difficulty"] for q in response.json()} == {1, 2, 3}
+
+
+def test_difficulty_that_is_not_a_level_is_422():
+    assert client.get("/api/questions", params={"difficulty": "hard"}).status_code == 422
+
+
 def test_page_is_served():
     response = client.get("/")
     assert response.status_code == 200

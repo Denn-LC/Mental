@@ -87,9 +87,18 @@ def test_same_seed_same_question():
 
 
 def test_make_questions_uses_only_given_categories():
-    questions = make_questions(["addition", "division"], 1, 50, seed=7)
+    questions = make_questions(["addition", "division"], [1], 50, seed=7)
     assert len(questions) == 50
     assert {q.category for q in questions} <= {"addition", "division"}
+
+
+def test_mixed_levels_give_easy_and_hard_questions():
+    questions = make_questions(CATEGORIES, [1, 2, 3], 600, seed=3)
+    assert {q.difficulty for q in questions} == {1, 2, 3}
+    percent = {q.strategy for q in questions if q.category == "percentage"}
+    relationship = {q.strategy for q in questions if q.category == "relationship"}
+    assert percent == {"percent_10", "percent_25", "percent_15"}
+    assert relationship == {"double_halve", "balance_sum"}
 
 
 def test_unknown_category_is_rejected():

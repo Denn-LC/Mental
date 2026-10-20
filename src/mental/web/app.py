@@ -15,7 +15,7 @@ app = FastAPI(title="mental")
 @app.get("/api/questions")
 def get_questions(
     category: str = "mixed",  # "mixed", one category, or a comma-separated list
-    difficulty: int = Query(1, ge=1, le=3),
+    difficulty: Literal["1", "2", "3", "mixed"] = "1",  # "mixed": each question gets a random level
     count: int = Query(20, ge=1, le=200),
 ):
     categories = CATEGORIES if category == "mixed" else category.split(",")
@@ -23,7 +23,8 @@ def get_questions(
     if unknown:
         raise HTTPException(400, f"unknown category: {', '.join(unknown)}")
     try:
-        questions = make_questions(categories, difficulty, count)
+        levels = [1, 2, 3] if difficulty == "mixed" else [int(difficulty)]
+        questions = make_questions(categories, levels, count)
     except ValueError as error:
         raise HTTPException(400, str(error))
     return [asdict(q) for q in questions]
