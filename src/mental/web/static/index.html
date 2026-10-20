@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>mental</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body data-heat="0">
+  <header>
+    <h1>mental</h1>
+    <p id="settings"><span id="mode"></span> · <span id="category"></span> · <span id="difficulty"></span></p>
+    <p id="stats"><span id="timer"></span> <span id="score">score 0</span> <span id="streak">streak 0</span></p>
+  </header>
+  <main>
+    <div id="question"></div>
+    <input id="answer" aria-label="answer" inputmode="numeric" autocomplete="off" spellcheck="false">
+    <div id="feedback" aria-live="polite"></div>
+    <ol id="help"></ol>
+    <section id="results" hidden></section>
+  </main>
+  <footer id="keys"></footer>
+  <script src="/app.js"></script>
+</body>
+</html>
