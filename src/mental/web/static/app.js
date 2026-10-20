@@ -2,22 +2,29 @@
 // Questions arrive from /api/questions already carrying their answer, hints and steps.
 
 const CATEGORIES = ["mixed", "addition", "subtraction", "multiplication", "division", "percentage", "relationship"];
-const KEYS = "Enter submit / next · H hint · Tab skip · C category · D level";
+const TEST_SECONDS = 60;
+const KEYS = {
+  free: "Enter submit / next · H hint · Tab skip · C category · D level · M test mode",
+  test: "type the answer · Tab skip · C category · D level · M free play · Enter start",
+};
 
 const $ = (id) => document.getElementById(id);
 const input = $("answer");
 
 const state = {
-  mode: "free",
+  mode: "free",       // "free" | "test"
   category: "mixed",
   difficulty: 1,
   queue: [],          // fetched questions not shown yet
+  seen: {},           // question id -> question, for the results screen
   current: null,      // question on screen
   attempt: null,      // attempt record for the current question
   shownAt: 0,
-  solved: false,      // answered, waiting for Enter
+  solved: false,      // free play: answered, waiting for Enter
   streak: 0,
   attempts: [],
+  testEndsAt: 0,      // 0 = no test running
+  timer: null,
 };
 
 async function fetchQuestions(count) {
@@ -29,7 +36,7 @@ async function fetchQuestions(count) {
 
 async function nextQuestion() {
   try {
-    if (state.queue.length === 0) state.queue = await fetchQuestions(20);
+    if (state.queue.length === 0) state.queue = await fetchQuestions(state.mode === "test" ? 150 : 20);
   } catch (error) {
     setFeedback(`Could not load questions (${error.message})`, "wrong");
     return;
@@ -39,6 +46,7 @@ async function nextQuestion() {
 
 function showQuestion(q) {
   state.current = q;
+  state.seen[q.id] = q;
   state.solved = false;
   state.attempt = {
     question_id: q.id, seed: q.seed, text: q.text, category: q.category, strategy: q.strategy,
@@ -97,6 +105,7 @@ function hint() {
 
 function skip() {
   if (!state.current || state.solved) return;
+  if (state.mode === "test" && !state.testEndsAt) return;
   finishAttempt(false, true);
   nextQuestion();
 }
@@ -105,14 +114,78 @@ function onInput() {
   // allow digits and one leading minus only
   const cleaned = input.value.replace(/[^\d\-−]/g, "").replace(/(?!^)[-−]/g, "");
   if (cleaned !== input.value) input.value = cleaned;
+  // test mode accepts the right answer as soon as it is typed
+  if (state.mode === "test" && state.testEndsAt && state.current &&
+      parseAnswer(input.value) === state.current.answer) {
+    finishAttempt(true);
+    nextQuestion();
+  }
 }
 
 function onEnter() {
-  if (state.solved) return nextQuestion();
+  if (state.mode === "test" && !state.testEndsAt) return startTest();
+  if (state.mode === "free" && state.solved) return nextQuestion();
   if (state.current) submit();
 }
 
+// --- test mode -------------------------------------------------------------
+
+function showTestIntro() {
+  state.current = null;
+  $("question").textContent = "1 minute. Enter to start";
+  $("timer").textContent = `${TEST_SECONDS}s`;
+  input.value = "";
+  showLines([]);
+  setFeedback("");
+}
+
+async function startTest() {
+  state.testEndsAt = Infinity;  // running, real end time set once questions arrive
+  state.current = null;
+  state.queue = [];
+  state.attempts = [];
+  state.seen = {};
+  setStreak(0);
+  $("score").textContent = "score 0";
+  $("results").hidden = true;
+  await nextQuestion();
+  if (!state.current) return stopTest();
+  state.testEndsAt = performance.now() + TEST_SECONDS * 1000;
+  state.timer = setInterval(tick, 100);
+}
+
+function tick() {
+  const left = state.testEndsAt - performance.now();
+  $("timer").textContent = `${Math.max(0, Math.ceil(left / 1000))}s`;
+  if (left <= 0) endTest();
+}
+
+function stopTest() {
+  clearInterval(state.timer);
+  state.testEndsAt = 0;
+}
+
+function endTest() {
+  stopTest();
+  state.current = null;  // the unfinished question is not recorded
+  input.value = "";
+  $("question").textContent = `time!  score ${state.attempts.filter((a) => a.correct).length}`;
+}
+
 // --- settings and display ---------------------------------------------------
+
+function switchMode() {
+  stopTest();
+  state.mode = state.mode === "free" ? "test" : "free";
+  state.queue = [];
+  state.attempts = [];
+  setStreak(0);
+  $("score").textContent = "score 0";
+  $("results").hidden = true;
+  renderSettings();
+  if (state.mode === "free") nextQuestion();
+  else showTestIntro();
+}
 
 function cycleCategory() {
   state.category = CATEGORIES[(CATEGORIES.indexOf(state.category) + 1) % CATEGORIES.length];
@@ -127,15 +200,15 @@ function cycleDifficulty() {
 function settingsChanged() {
   state.queue = [];
   renderSettings();
-  nextQuestion();
+  if (state.mode === "free") nextQuestion();
 }
 
 function renderSettings() {
-  $("mode").textContent = "free play";
+  $("mode").textContent = state.mode === "free" ? "free play" : "test yourself";
   $("category").textContent = state.category;
   $("difficulty").textContent = `level ${state.difficulty}`;
-  $("timer").hidden = true;
-  $("keys").textContent = KEYS;
+  $("timer").hidden = state.mode === "free";
+  $("keys").textContent = KEYS[state.mode];
 }
 
 function setStreak(n) {
@@ -166,11 +239,13 @@ document.addEventListener("keydown", (event) => {
   if (event.ctrlKey || event.metaKey || event.altKey) return;
   input.focus();
   const key = event.key.toLowerCase();
+  const running = state.testEndsAt !== 0;
   if (key === "enter") onEnter();
   else if (key === "tab") skip();
-  else if (key === "h") hint();
-  else if (key === "c") cycleCategory();
-  else if (key === "d") cycleDifficulty();
+  else if (key === "h" && state.mode === "free") hint();
+  else if (key === "m") switchMode();
+  else if (key === "c" && !running) cycleCategory();
+  else if (key === "d" && !running) cycleDifficulty();
   else return;  // anything else (digits, minus, backspace) types normally
   event.preventDefault();
 });
