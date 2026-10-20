@@ -70,3 +70,12 @@ def test_every_category_has_questions_at_every_level():
     for category in CATEGORIES:
         for difficulty in [1, 2, 3]:
             make_question(category, difficulty, seed=1)
+
+
+def test_basic_subtract_never_asks_x_minus_x():
+    from mental.engine.strategies import basic_subtract
+
+    for difficulty in [1, 2, 3]:
+        for seed in range(2000):
+            text, answer, hints, steps = basic_subtract(random.Random(seed), difficulty)
+            assert answer != 0, text

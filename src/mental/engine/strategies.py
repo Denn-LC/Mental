@@ -47,9 +47,9 @@ def basic_add(rng, difficulty):
 
 def basic_subtract(rng, difficulty):
     digits = difficulty + 1
-    b = random_number(rng, digits)
+    b = rng.randint(10 ** (digits - 1), 10**digits - 2)  # leaves room for a > b
     b += 0 if b % 10 else 1  # a round b would make the hint pointless
-    a = rng.randint(b, 10**digits - 1)
+    a = rng.randint(b + 1, 10**digits - 1)  # never x − x
     parts = place_parts(b)
     hints = [
         f"Take {fmt(b)} away one place value at a time.",

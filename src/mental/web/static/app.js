@@ -24,6 +24,7 @@ const state = {
   streak: 0,
   attempts: [],
   testEndsAt: 0,      // 0 = no test running
+  endedAt: -Infinity, // when the last test ended
   timer: null,
 };
 
@@ -123,7 +124,11 @@ function onInput() {
 }
 
 function onEnter() {
-  if (state.mode === "test" && !state.testEndsAt) return startTest();
+  if (state.mode === "test" && !state.testEndsAt) {
+    // a late Enter from the last answer must not skip straight past the results
+    if (performance.now() - state.endedAt > 1000) startTest();
+    return;
+  }
   if (state.mode === "free" && state.solved) return nextQuestion();
   if (state.current) submit();
 }
@@ -149,6 +154,7 @@ async function startTest() {
   $("score").textContent = "score 0";
   $("results").hidden = true;
   await nextQuestion();
+  if (state.mode !== "test" || state.testEndsAt !== Infinity) return;  // M was pressed while loading
   if (!state.current) return stopTest();
   state.testEndsAt = performance.now() + TEST_SECONDS * 1000;
   state.timer = setInterval(tick, 100);
@@ -168,6 +174,7 @@ function stopTest() {
 async function endTest() {
   stopTest();
   state.current = null;  // the unfinished question is not recorded
+  state.endedAt = performance.now();
   $("question").textContent = "time!";
   input.value = "";
   const response = await fetch("/api/summary", {
@@ -175,6 +182,7 @@ async function endTest() {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(state.attempts),
   });
+  if (state.mode !== "test" || state.testEndsAt) return;  // moved on while results loaded
   if (!response.ok) return setFeedback(`Could not load results (server said ${response.status})`, "wrong");
   showResults(await response.json());
 }
