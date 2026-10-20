@@ -19,7 +19,7 @@ CASES = [(sid, level) for sid, s in STRATEGIES.items() for level in s["difficult
 def test_strategy_maths_is_true(strategy_id, difficulty):
     make = STRATEGIES[strategy_id]["make"]
     for seed in range(300):
-        text, answer, hints, steps = make(random.Random(seed), difficulty)
+        text, answer, steps = make(random.Random(seed), difficulty)
         assert type(answer) is int
         assert abs(answer) <= 99_999
         if "?" in text:
@@ -27,10 +27,7 @@ def test_strategy_maths_is_true(strategy_id, difficulty):
             assert evaluate(left) == evaluate(right.replace("?", str(answer))), text
         else:
             assert evaluate(text) == answer, text
-        assert len(hints) == 2
-        for h in hints:
-            sides = h.split(" = ")
-            assert len(sides) == 1 or sides[0] != sides[1], f"pointless hint: {h}"
+        assert "−" not in text + "".join(steps), "the pixel font has no − glyph; use -"
         for step in steps:
             left, right = step.split(" = ")
             assert evaluate(left) == evaluate(right), f"{text}: {step}"
@@ -77,5 +74,5 @@ def test_basic_subtract_never_asks_x_minus_x():
 
     for difficulty in [1, 2, 3]:
         for seed in range(2000):
-            text, answer, hints, steps = basic_subtract(random.Random(seed), difficulty)
+            text, answer, steps = basic_subtract(random.Random(seed), difficulty)
             assert answer != 0, text

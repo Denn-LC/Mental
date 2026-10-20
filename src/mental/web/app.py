@@ -43,7 +43,7 @@ class Attempt(BaseModel):
     correct: bool
     skipped: bool
     wrong_tries: list[str]
-    hints_used: int = Field(ge=0, le=3)
+    gave_up: bool
     time_ms: int = Field(ge=0)
     mode: Literal["free", "test"]
 

@@ -1,17 +1,18 @@
 """Turn a list of attempt records into accuracy and speed numbers.
 
-"accuracy" counts clean answers: correct on the first try with no hints.
-"avg_time_ms" is over solved questions only, so skips don't drag it down.
+"accuracy" counts clean answers: correct on the first try.
+"avg_time_ms" is over solved questions only, so skips and give-ups don't drag it down.
 """
 
 
 def stats(attempts):
     solved = [a for a in attempts if a["correct"]]
-    clean = [a for a in solved if not a["wrong_tries"] and a["hints_used"] == 0]
+    clean = [a for a in solved if not a["wrong_tries"]]
     return {
         "count": len(attempts),
         "score": len(solved),
         "skipped": sum(1 for a in attempts if a["skipped"]),
+        "gave_up": sum(1 for a in attempts if a["gave_up"]),
         "accuracy": len(clean) / len(attempts) if attempts else 0.0,
         "avg_time_ms": round(sum(a["time_ms"] for a in solved) / len(solved)) if solved else 0,
     }

@@ -11,7 +11,7 @@ def test_questions_for_one_category():
     questions = response.json()
     assert len(questions) == 5
     assert {q["category"] for q in questions} == {"addition"}
-    assert {"id", "seed", "text", "answer", "strategy", "difficulty", "hints", "steps"} <= questions[0].keys()
+    assert {"id", "seed", "text", "answer", "strategy", "difficulty", "steps"} <= questions[0].keys()
 
 
 def test_questions_for_a_category_list():

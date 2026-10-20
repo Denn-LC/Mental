@@ -17,7 +17,7 @@ def make_question(category, difficulty, seed):
         raise ValueError(f"no {category} questions at level {difficulty}")
     rng = random.Random(seed)
     strategy = rng.choice(options)
-    text, answer, hints, steps = STRATEGIES[strategy]["make"](rng, difficulty)
+    text, answer, steps = STRATEGIES[strategy]["make"](rng, difficulty)
     return Question(
         id=f"{category}-{difficulty}-{seed}",
         seed=seed,
@@ -26,7 +26,6 @@ def make_question(category, difficulty, seed):
         category=category,
         strategy=strategy,
         difficulty=difficulty,
-        hints=hints,
         steps=steps,
     )
 
