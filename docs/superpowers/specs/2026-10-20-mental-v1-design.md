@@ -13,7 +13,7 @@ public deployment — without building any of those yet.
 
 ## Constraints
 
-- Python + FastAPI, plain HTML/CSS, vanilla JS, uv. Runtime deps: `fastapi`, `uvicorn`. Dev: `pytest`.
+- Python + FastAPI, plain HTML/CSS, vanilla JS, uv. Runtime deps: `fastapi`, `uvicorn`. Dev: `pytest`, `httpx2` (for FastAPI's TestClient).
 - No Docker, JS frameworks, Redis, Postgres, cloud, auth, AI APIs, build step.
 - No persistence in v1. Results live in the browser until the tab closes.
 - Readable, ordinary code: functions and dataclasses, no class hierarchies or plugin systems.
@@ -47,13 +47,13 @@ src/mental/
       index.html       # one page, both modes
       style.css        # pixel theme, streak heat via --heat
       app.js           # input, timer, checking, attempt records
-      fonts/           # Press Start 2P + a monospace, served locally
+      fonts/           # Press Start 2P (+ its OFL licence), served locally
 tests/
   test_strategies.py
   test_summary.py
 ```
 
-Run with `uv run uvicorn mental.web.app:app --reload`.
+Run with `uv run mental` (starts uvicorn with reload on http://127.0.0.1:8000).
 
 ## Questions
 
@@ -113,7 +113,7 @@ including signed forms (`−x − y`, `−x + y`).
 | `basic_add` | addition | 1–3 | 4,382 + 2,917 | column by column, left to right |
 | `near_round_add` | addition | 2–3 | 467 + 198 | + 200 − 2 |
 | `signed_add` | addition | 3 | −347 + 812 | bigger magnitude minus smaller, keep its sign |
-| `basic_subtract` | subtraction | 1–3 | 7,104 − 2,658 | count up / column |
+| `basic_subtract` | subtraction | 1–3 | 7,104 − 2,658 | take away one place value at a time |
 | `near_round_subtract` | subtraction | 2–3 | 615 − 197, 940 − 94 | − 200 + 3, − 100 + 6 |
 | `signed_subtract` | subtraction | 3 | −347 − 812 | add magnitudes, result negative |
 | `basic_multiply` | multiplication | 1–2 | 7 × 8, 34 × 6 | split the bigger number |
@@ -124,7 +124,7 @@ including signed forms (`−x − y`, `−x + y`).
 | `percent_10` | percentage | 1 | 10% of 340 | ÷ 10 |
 | `percent_25` | percentage | 2 | 25% of 360 | ÷ 4 |
 | `percent_15` | percentage | 3 | 15% of 240 | 10% + 5% |
-| `double_halve` | relationship | 1–3 | 18 × 6 = 9 × ? | halve one side, double the other (level 3: ×3 / ÷3, e.g. 24 × 15 = 36 × ?) |
+| `double_halve` | relationship | 1–3 | 18 × 6 = 9 × ? | halve one side, double the other (level 3: ×3 / ÷3, e.g. 12 × 15 = 36 × ?) |
 | `balance_sum` | relationship | 2–3 | 47 + 38 = 50 + ? | what moved from one term moves off the other |
 
 The exact wording of hints and steps is a first draft; the user will review the methods.
@@ -149,17 +149,20 @@ later without changes:
 
 ### Free Play
 
-- Choose one category (or mixed) and a difficulty with number keys.
+- `C` cycles the category (mixed → addition → … → relationship), `D` cycles the level 1–3.
+  Letter keys are free because the answer box only accepts digits and a minus.
 - Enter submits. Wrong → "not quite", stay on the question, value added to `wrong_tries`.
 - `H` reveals the next help level: hint 1 → hint 2 → solution steps.
 - When correct, the solution steps are shown as reinforcement; Enter goes to the next question.
+- Tab skips (recorded as skipped).
 - Streak counts answers correct on the first try with no hints.
 
 ### Test Yourself — 1-minute mixed sprint
 
 - One large question. Typing the correct answer advances immediately (no Enter).
 - Enter on a wrong value flashes it and adds it to `wrong_tries`; stay on the question.
-- Tab skips.
+- Tab skips. `C`/`D` work before a test starts; `M` switches between the two modes.
+- The question unfinished at 0:00 is not recorded.
 - At 0:00 JS posts attempts to `/api/summary` and shows results: score, accuracy, average time,
   a per-category table, and the slowest questions with their methods.
 
@@ -170,16 +173,18 @@ later without changes:
 
 ## Summary (`summary.py`)
 
-`summarise(attempts) -> dict` returns overall accuracy and average time, the same per category
+`summarise(attempts) -> dict` returns overall score, accuracy (correct first try, no hints) and
+average time over solved questions, the same per category
 and per strategy, and the slowest attempts. A weakness can be low accuracy, slow time, or both,
 so both numbers are always reported side by side. No "weak/strong" labels in v1.
 
 ## Visual direction
 
-- Dark background, amber/orange accents, Press Start 2P for headings, timer and score; a readable
-  monospace for numbers.
+- Dark background, amber/orange accents, Press Start 2P for headings, the question, timer and score;
+  the system monospace for hints, steps and results.
 - Chunky pixel-style borders built in CSS, with no image assets.
-- Streak heat: JS sets `--heat` (0–3) from the current streak; CSS scales accent brightness and glow.
+- Streak heat: JS sets `<body data-heat="0–3">` from the current streak (3, 10, 20 clean answers);
+  CSS swaps the accent and glow colours per level.
 - No animations beyond simple feedback flashes in v1.
 
 ## Testing
