@@ -9,17 +9,53 @@
 <body data-heat="0">
   <header>
     <h1>mental</h1>
-    <p id="settings"><span id="mode"></span> · <span id="category"></span> · <span id="difficulty"></span></p>
-    <p id="stats"><span id="timer"></span> <span id="score">score 0</span> <span id="streak">streak 0</span></p>
   </header>
   <main>
-    <div id="question"></div>
-    <input id="answer" aria-label="answer" inputmode="numeric" autocomplete="off" spellcheck="false">
-    <div id="feedback" aria-live="polite"></div>
-    <ol id="help"></ol>
-    <section id="results" hidden></section>
+    <section id="home" class="screen">
+      <button class="choice" data-nav data-mode="free">Free Play</button>
+      <button class="choice" data-nav data-mode="test">Test Yourself · 2 min</button>
+      <p class="keys">arrows choose · Enter go</p>
+    </section>
+
+    <section id="options" class="screen" hidden>
+      <fieldset>
+        <legend>topics</legend>
+        <label><input type="checkbox" data-nav name="topic" value="addition" checked> addition</label>
+        <label><input type="checkbox" data-nav name="topic" value="subtraction" checked> subtraction</label>
+        <label><input type="checkbox" data-nav name="topic" value="multiplication" checked> multiplication</label>
+        <label><input type="checkbox" data-nav name="topic" value="division" checked> division</label>
+        <label><input type="checkbox" data-nav name="topic" value="percentage" checked> percentages</label>
+        <label><input type="checkbox" data-nav name="topic" value="relationship" checked> relationships</label>
+      </fieldset>
+      <fieldset>
+        <legend>level</legend>
+        <label><input type="radio" data-nav name="level" value="1" checked> 1 easy</label>
+        <label><input type="radio" data-nav name="level" value="2"> 2 medium</label>
+        <label><input type="radio" data-nav name="level" value="3"> 3 hard</label>
+      </fieldset>
+      <button id="play" class="choice" data-nav>Play</button>
+      <p id="menu-error" aria-live="polite"></p>
+      <p class="keys">arrows move · Enter/Space tick · Esc back</p>
+    </section>
+
+    <section id="game" class="screen" hidden>
+      <p id="settings"></p>
+      <p id="stats"><span id="timer"></span> <span id="score">score 0</span> <span id="streak">streak 0</span></p>
+      <div id="question"></div>
+      <input id="answer" aria-label="answer" inputmode="numeric" autocomplete="off" spellcheck="false">
+      <div id="free-buttons" class="buttons">
+        <button id="submit">Enter</button>
+        <button id="give-up">Give up</button>
+      </div>
+      <div id="test-buttons" class="buttons">
+        <button id="skip">Skip</button>
+      </div>
+      <div id="feedback" aria-live="polite"></div>
+      <ol id="steps"></ol>
+      <section id="results" hidden></section>
+      <p id="keys" class="keys"></p>
+    </section>
   </main>
-  <footer id="keys"></footer>
   <script src="/app.js"></script>
 </body>
 </html>
