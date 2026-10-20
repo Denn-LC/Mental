@@ -64,3 +64,9 @@ def test_addition_and_subtraction_have_tricks_at_levels_2_and_3():
     assert {"near_round_add", "signed_add"} <= set(strategies_for("addition", 3))
     assert "near_round_subtract" in strategies_for("subtraction", 2)
     assert {"near_round_subtract", "signed_subtract"} <= set(strategies_for("subtraction", 3))
+
+
+def test_every_category_has_questions_at_every_level():
+    for category in CATEGORIES:
+        for difficulty in [1, 2, 3]:
+            make_question(category, difficulty, seed=1)
