@@ -3,6 +3,7 @@
 Each strategy is a function (rng, difficulty) -> (text, answer, steps).
 It picks numbers that suit one mental trick and writes the worked method for them.
 Every step must be a true sum written as "<sum> = <result>" (the tests check this).
+No question or step uses 0 or 1 as a number: those sums are pointless.
 """
 
 
@@ -13,6 +14,20 @@ def fmt(n):
 
 def random_number(rng, digits):
     return rng.randint(10 ** (digits - 1), 10**digits - 1)
+
+
+def second_number(rng, difficulty):
+    """The number being added or taken away in the basic sums.
+
+    It never ends in 1 (the last step would be "+ 1"), never uses the top value
+    (so subtraction has room for a bigger first number), and is only round
+    (30, 500) at level 1, where "+ 30" belongs.
+    """
+    digits = difficulty + 1  # level 1: 2 digits, 2: 3 digits, 3: 4 digits
+    while True:
+        b = rng.randint(10 ** (digits - 1), 10**digits - 2)
+        if b % 10 != 1 and (difficulty == 1 or b % 10 != 0):
+            return b
 
 
 def place_parts(n):
@@ -37,9 +52,7 @@ def chunk_steps(start, parts, subtract=False):
 
 
 def basic_add(rng, difficulty):
-    digits = difficulty + 1  # level 1: 2 digits, 2: 3 digits, 3: 4 digits
-    a, b = random_number(rng, digits), random_number(rng, digits)
-    b += 0 if b % 10 else 1  # a round b would make the method one step
+    a, b = random_number(rng, difficulty + 1), second_number(rng, difficulty)
     return f"{fmt(a)} + {fmt(b)}", a + b, chunk_steps(a, place_parts(b))
 
 
@@ -63,6 +76,8 @@ def near_round_add(rng, difficulty):
 
 def signed_add(rng, difficulty):
     x, y = random_number(rng, rng.choice([3, 4])), random_number(rng, rng.choice([3, 4]))
+    while y == x:  # -347 + 347 is pointless
+        y = random_number(rng, rng.choice([3, 4]))
     answer = y - x
     big, small = max(x, y), min(x, y)
     steps = [
@@ -76,10 +91,8 @@ def signed_add(rng, difficulty):
 
 
 def basic_subtract(rng, difficulty):
-    digits = difficulty + 1
-    b = rng.randint(10 ** (digits - 1), 10**digits - 2)  # leaves room for a > b
-    b += 0 if b % 10 else 1  # a round b would make the method one step
-    a = rng.randint(b + 1, 10**digits - 1)  # never x - x
+    b = second_number(rng, difficulty)
+    a = rng.randint(b + 1, 10 ** (difficulty + 1) - 1)  # never x - x
     return f"{fmt(a)} - {fmt(b)}", a - b, chunk_steps(a, place_parts(b), subtract=True)
 
 
@@ -110,9 +123,8 @@ def signed_subtract(rng, difficulty):
 def basic_multiply(rng, difficulty):
     if difficulty == 1:
         a, b = rng.randint(2, 9), rng.randint(2, 9)
-        steps = [f"{a} × {b - 1} = {a * (b - 1)}", f"{a * (b - 1)} + {a} = {a * b}"]
-        return f"{a} × {b}", a * b, steps
-    a = rng.choice([n for n in range(12, 100) if n % 10])
+        return f"{a} × {b}", a * b, [f"{a} × {b} = {a * b}"]  # a times-table fact
+    a = rng.choice([n for n in range(12, 100) if n % 10 > 1])  # "1 × 6" would be a pointless step
     b = rng.randint(3, 9)
     tens, units = a - a % 10, a % 10
     steps = [
@@ -144,7 +156,7 @@ def basic_divide(rng, difficulty):
         a = b * q
         return f"{a} ÷ {b}", q, [f"{b} × {q} = {a}", f"{a} ÷ {b} = {q}"]
     b = rng.randint(3, 9)
-    q = rng.choice([n for n in range(12, 31) if n % 10])
+    q = rng.choice([n for n in range(12, 31) if n % 10 > 1])  # "20 + 1" would be a pointless step
     a = b * q
     tens = q - q % 10
     first, rest = b * tens, a - b * tens
@@ -212,7 +224,8 @@ def double_halve(rng, difficulty):
 
 def balance_sum(rng, difficulty):
     unit = 10 if difficulty == 2 else 100
-    a = rng.choice([n for n in range(unit + 1, unit * 10) if n % unit])
+    # a stops at least 2 short of the next round number, so the move is never 1
+    a = rng.choice([n for n in range(unit + 1, unit * 10) if 0 < n % unit < unit - 1])
     b = rng.randint(unit, unit * 10 - 1)
     c = (a // unit + 1) * unit
     move = c - a
