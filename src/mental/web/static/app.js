@@ -165,11 +165,39 @@ function stopTest() {
   state.testEndsAt = 0;
 }
 
-function endTest() {
+async function endTest() {
   stopTest();
   state.current = null;  // the unfinished question is not recorded
+  $("question").textContent = "time!";
   input.value = "";
-  $("question").textContent = `time!  score ${state.attempts.filter((a) => a.correct).length}`;
+  const response = await fetch("/api/summary", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(state.attempts),
+  });
+  if (!response.ok) return setFeedback(`Could not load results (server said ${response.status})`, "wrong");
+  showResults(await response.json());
+}
+
+const percent = (x) => `${Math.round(x * 100)}%`;
+const seconds = (ms) => `${(ms / 1000).toFixed(1)}s`;
+
+function showResults(summary) {
+  const o = summary.overall;
+  const rows = Object.entries(summary.by_category)
+    .map(([name, s]) => `<tr><td>${name}</td><td>${s.score}/${s.count}</td><td>${percent(s.accuracy)}</td><td>${seconds(s.avg_time_ms)}</td></tr>`)
+    .join("");
+  const slowest = summary.slowest
+    .map((id) => state.seen[id])
+    .map((q) => `<li>${q.text}<br><small>${q.steps.join("  →  ")}</small></li>`)
+    .join("");
+  $("results").innerHTML = `
+    <h2>score ${o.score}</h2>
+    <p>accuracy ${percent(o.accuracy)} · avg ${seconds(o.avg_time_ms)} · skipped ${o.skipped}</p>
+    <table><tr><th>category</th><th>solved</th><th>clean</th><th>avg</th></tr>${rows}</table>
+    <h3>slowest: learn these</h3><ol>${slowest}</ol>
+    <p>Enter to go again</p>`;
+  $("results").hidden = false;
 }
 
 // --- settings and display ---------------------------------------------------
