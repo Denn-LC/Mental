@@ -55,3 +55,12 @@ def test_make_questions_uses_only_given_categories():
 def test_unknown_category_is_rejected():
     with pytest.raises(ValueError):
         make_question("astrology", 1, 1)
+
+
+def test_addition_and_subtraction_have_tricks_at_levels_2_and_3():
+    from mental.engine.generate import strategies_for
+
+    assert "near_round_add" in strategies_for("addition", 2)
+    assert {"near_round_add", "signed_add"} <= set(strategies_for("addition", 3))
+    assert "near_round_subtract" in strategies_for("subtraction", 2)
+    assert {"near_round_subtract", "signed_subtract"} <= set(strategies_for("subtraction", 3))

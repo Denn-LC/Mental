@@ -103,9 +103,79 @@ def basic_divide(rng, difficulty):
     return f"{a} ÷ {b}", q, hints, steps
 
 
+def near_round(rng, difficulty):
+    """A number just under a round one, e.g. 197 = 200 − 3. Returns (round, off)."""
+    if difficulty == 2:
+        return rng.choice(range(100, 1000, 100)), rng.randint(1, 4)
+    return rng.choice(range(100, 10000, 100)), rng.randint(1, 9)
+
+
+def near_round_add(rng, difficulty):
+    round_, off = near_round(rng, difficulty)
+    b = round_ - off
+    a = random_number(rng, difficulty + 1)
+    hints = [
+        f"{fmt(b)} is very close to a round number.",
+        f"Think of {fmt(b)} as {fmt(round_)} − {off}.",
+    ]
+    steps = [
+        f"{fmt(a)} + {fmt(round_)} = {fmt(a + round_)}",
+        f"{fmt(a + round_)} − {off} = {fmt(a + b)}",
+    ]
+    return f"{fmt(a)} + {fmt(b)}", a + b, hints, steps
+
+
+def signed_add(rng, difficulty):
+    x, y = random_number(rng, rng.choice([3, 4])), random_number(rng, rng.choice([3, 4]))
+    answer = y - x
+    big, small = max(x, y), min(x, y)
+    hints = [
+        "One number is negative, so this is really a subtraction.",
+        f"Work out {fmt(big)} − {fmt(small)}, then keep the sign of the bigger one.",
+    ]
+    steps = [
+        f"{fmt(big)} − {fmt(small)} = {fmt(big - small)}",
+        f"{fmt(-x)} + {fmt(y)} = {fmt(answer)}",
+    ]
+    return f"{fmt(-x)} + {fmt(y)}", answer, hints, steps
+
+
+def near_round_subtract(rng, difficulty):
+    round_, off = near_round(rng, difficulty)
+    b = round_ - off
+    a = rng.randint(b + 1, 10 ** (difficulty + 1) - 1)
+    hints = [
+        f"{fmt(b)} is very close to a round number.",
+        f"Think of {fmt(b)} as {fmt(round_)} − {off}.",
+    ]
+    steps = [
+        f"{fmt(a)} − {fmt(round_)} = {fmt(a - round_)}",
+        f"{fmt(a - round_)} + {off} = {fmt(a - b)}",
+    ]
+    return f"{fmt(a)} − {fmt(b)}", a - b, hints, steps
+
+
+def signed_subtract(rng, difficulty):
+    x, y = random_number(rng, rng.choice([3, 4])), random_number(rng, rng.choice([3, 4]))
+    answer = -(x + y)
+    hints = [
+        "Both parts push you further below zero.",
+        f"Add {fmt(x)} + {fmt(y)}, then make it negative.",
+    ]
+    steps = [
+        f"{fmt(x)} + {fmt(y)} = {fmt(x + y)}",
+        f"{fmt(-x)} − {fmt(y)} = {fmt(answer)}",
+    ]
+    return f"{fmt(-x)} − {fmt(y)}", answer, hints, steps
+
+
 STRATEGIES = {
     "basic_add": {"category": "addition", "difficulties": [1, 2, 3], "make": basic_add},
+    "near_round_add": {"category": "addition", "difficulties": [2, 3], "make": near_round_add},
+    "signed_add": {"category": "addition", "difficulties": [3], "make": signed_add},
     "basic_subtract": {"category": "subtraction", "difficulties": [1, 2, 3], "make": basic_subtract},
+    "near_round_subtract": {"category": "subtraction", "difficulties": [2, 3], "make": near_round_subtract},
+    "signed_subtract": {"category": "subtraction", "difficulties": [3], "make": signed_subtract},
     "basic_multiply": {"category": "multiplication", "difficulties": [1, 2], "make": basic_multiply},
     "basic_divide": {"category": "division", "difficulties": [1, 2], "make": basic_divide},
 }
