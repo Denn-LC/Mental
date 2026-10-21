@@ -81,7 +81,7 @@ with sync_playwright() as p:
 
     # free play options: the arrows move the way they point (topics are a 3 x 2 grid at this width)
     page.keyboard.press("ArrowUp")
-    check("up from Play reaches a level", focused() in ("1", "2", "3"))
+    check("up from Play reaches a level", focused() in ("1", "2", "3", "mixed"))
     page.keyboard.press("ArrowUp")
     check("up again reaches the bottom row of topics", focused() in ("division", "percentage", "relationship"))
     page.focus("input[value=addition]")
@@ -265,6 +265,21 @@ with sync_playwright() as p:
     page.evaluate("state.testEndsAt = performance.now()")
     page.wait_for_timeout(400)
     check("results failure shows a message", "Could not load results" in page.text_content("#feedback"))
+
+    # free play with mixed levels
+    page.reload()
+    page.click("[data-mode=free]")
+    page.click("label:has(input[name=level][value=mixed])")
+    page.click("#play")
+    playing()
+    check("Free Play can mix levels", page.text_content("#settings") == "free play · mixed · all levels"
+          and page.evaluate("new Set([state.current, ...state.queue].map((q) => q.difficulty)).size") == 3)
+    for width in [900, 400]:
+        page.set_viewport_size({"width": width, "height": 800})
+        page.keyboard.press("Escape")
+        page.click("[data-mode=free]")
+        check(f"the four levels fit at {width}px", page.evaluate("document.documentElement.scrollWidth <= innerWidth"))
+        page.keyboard.press("Escape")
 
     check("no page errors", not errors)
     print(f"{sum(results)}/{len(results)} passed", errors or "")
