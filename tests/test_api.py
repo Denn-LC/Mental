@@ -102,6 +102,12 @@ def test_attempt_that_does_not_match_its_question_is_400():
     assert save(new_player(), "test", tampered).status_code == 400
 
 
+def test_question_id_with_a_huge_seed_is_400():
+    q = make_question("addition", 1, 5)
+    huge = record(q, str(q.answer), question_id=f"addition-1-{10**30}")
+    assert save(new_player(), "test", [huge]).status_code == 400
+
+
 def test_bad_attempt_is_422():
     bad = records(1)
     bad[0]["time_ms"] = -5

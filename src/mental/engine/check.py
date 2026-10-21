@@ -12,7 +12,10 @@ def question_from_id(question_id):
     """'division-2-77' -> the very Question make_question gave out. ValueError if it can't be."""
     try:
         category, difficulty, seed = question_id.rsplit("-", 2)
-        question = make_question(category, int(difficulty), int(seed))
+        seed = int(seed)
+        if not (0 <= seed < 2**32):
+            raise ValueError(f"not a question id: {question_id!r}")
+        question = make_question(category, int(difficulty), seed)
     except ValueError:
         raise ValueError(f"not a question id: {question_id!r}") from None
     if question.id != question_id:  # "1_000" or " 5" parse as numbers but are not how ids are written

@@ -35,7 +35,7 @@ def test_changed_text_is_rejected():
         checked(record(Q, "1", text="2 + 2"))
 
 
-@pytest.mark.parametrize("question_id", ["", "addition", "addition-1", "addition-9-5", "astrology-1-5", "addition-1-1_000"])
+@pytest.mark.parametrize("question_id", ["", "addition", "addition-1", "addition-9-5", "astrology-1-5", "addition-1-1_000", f"addition-1-{2**32}"])
 def test_bad_question_ids_are_rejected(question_id):
     with pytest.raises(ValueError):
         question_from_id(question_id)
