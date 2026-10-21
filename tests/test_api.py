@@ -114,6 +114,16 @@ def test_bad_attempt_is_422():
     assert save(new_player(), "test", bad).status_code == 422
 
 
+@pytest.mark.parametrize("field, value", [
+    ("given", "12a"), ("given", "1234567"), ("wrong_tries", ["hello"]),
+    ("seed", -1), ("difficulty", 4), ("answer", 100_000),
+])
+def test_attempt_fields_out_of_shape_are_422(field, value):
+    bad = records(1)
+    bad[0][field] = value
+    assert save(new_player(), "test", bad).status_code == 422
+
+
 def test_too_many_attempts_is_422():
     assert save(new_player(), "test", records(1) * 1001).status_code == 422
 

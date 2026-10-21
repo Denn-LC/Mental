@@ -48,7 +48,7 @@ def database():
 
 Database = Annotated[sqlite3.Connection, Depends(database)]
 PlayerId = Annotated[int, Field(ge=1, le=MAX_ID)]
-Short = Annotated[str, Field(max_length=16)]
+Typed = Annotated[str, Field(pattern=r"^[-−]?[0-9]{0,5}$")]  # what the answer box allows: "", "-", "-465", "−465"
 
 
 @app.get("/api/questions")
@@ -77,16 +77,16 @@ class Attempt(BaseModel):
     """One attempt record, as built by app.js. Its question fields and `correct` are re-checked."""
 
     question_id: str = Field(max_length=64)
-    seed: int
+    seed: int = Field(ge=0, lt=2**32)
     text: str = Field(max_length=64)
     category: str = Field(max_length=32)
     strategy: str = Field(max_length=32)
-    difficulty: int
-    answer: int
-    given: Short
+    difficulty: int = Field(ge=1, le=3)
+    answer: int = Field(ge=-99_999, le=99_999)
+    given: Typed
     correct: bool
     skipped: bool
-    wrong_tries: list[Short] = Field(max_length=1000)
+    wrong_tries: list[Typed] = Field(max_length=1000)
     gave_up: bool
     time_ms: int = Field(ge=0, le=10**9)
     mode: Literal["practice", "test"]

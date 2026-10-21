@@ -45,6 +45,7 @@ CREATE INDEX IF NOT EXISTS rounds_by_player ON rounds (player_id, mode);
 CREATE INDEX IF NOT EXISTS attempts_by_round ON attempts (round_id);
 PRAGMA user_version = 1;
 """
+SCHEMA_VERSION = 1  # the user_version SCHEMA sets
 
 
 class NameTaken(Exception):
@@ -61,9 +62,16 @@ def connect(path=None):
     # FastAPI may open the connection on one worker thread and use it on another (never at once)
     conn = sqlite3.connect(path, check_same_thread=False)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    if conn.execute("PRAGMA user_version").fetchone()[0] == 0:
-        conn.executescript(SCHEMA)
+    try:
+        conn.execute("PRAGMA foreign_keys = ON")
+        version = conn.execute("PRAGMA user_version").fetchone()[0]
+        if version > SCHEMA_VERSION:
+            raise RuntimeError(f"{path} was made by a newer version of mental (schema {version})")
+        if version == 0:
+            conn.executescript(SCHEMA)
+    except BaseException:
+        conn.close()
+        raise
     return conn
 
 

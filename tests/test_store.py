@@ -1,3 +1,4 @@
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -109,3 +110,36 @@ def test_db_path_comes_from_MENTAL_DB(monkeypatch, tmp_path):
     assert store.db_path() == tmp_path / "x.db"
     monkeypatch.delenv("MENTAL_DB")
     assert store.db_path() == Path.home() / ".mental" / "mental.db"
+
+
+def test_rounds_need_a_real_player_and_mode(conn):
+    me = store.add_player(conn, "me")["id"]
+    with pytest.raises(sqlite3.IntegrityError):
+        store.save_round(conn, me + 1, "test", saved(1))
+    with pytest.raises(sqlite3.IntegrityError):
+        store.save_round(conn, me, "free", saved(1))
+    assert store.history(conn, me)["count"] == 0  # neither left a round behind
+
+
+def test_an_empty_test_is_saved_with_score_0(conn):
+    me = store.add_player(conn, "me")["id"]
+    store.save_round(conn, me, "test", [])
+    history = store.history(conn, me)
+    assert (history["count"], history["best"]) == (1, 0)
+    assert store.player_attempts(conn, me) == []
+
+
+def test_leaderboard_shows_the_top_ten(conn):
+    for score in range(12):
+        player = store.add_player(conn, f"p{score:02}")["id"]
+        store.save_round(conn, player, "test", saved(score))
+    assert [row["best"] for row in store.leaderboard(conn)] == list(range(11, 1, -1))
+
+
+def test_a_database_from_a_newer_version_is_refused(tmp_path):
+    path = tmp_path / "newer.db"
+    conn = store.connect(path)
+    conn.execute("PRAGMA user_version = 2")
+    conn.close()
+    with pytest.raises(RuntimeError, match="newer version"):
+        store.connect(path)

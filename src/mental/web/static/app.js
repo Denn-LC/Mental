@@ -36,6 +36,10 @@ const state = {
   solved: false,      // practice: answered or given up, waiting for Enter
   streak: 0,
   attempts: [],       // finished attempts of this round, not saved yet
+  unsaved: null,      // a finished round whose save failed: Enter or Retry tries again
+  saving: null,       // {session, keepalive} while a round save is in flight
+  screenLoad: 0,      // goes up each time a menu screen starts loading; stale loads check it
+  addingPlayer: false,
   testEndsAt: 0,      // 0 = no test running
   endedAt: -Infinity, // when the last round ended
   timer: null,
@@ -44,7 +48,7 @@ const state = {
 // --- players -------------------------------------------------------------------
 
 async function getJSON(url) {
-  const response = await fetch(url);
+  const response = await fetch(url, { signal: AbortSignal.timeout(10000) });  // a hung server ends in an error
   if (!response.ok) throw new Error(`server said ${response.status}`);
   return response.json();
 }
@@ -68,16 +72,18 @@ async function showPlayers() {
   $("player-error").textContent = "";
   $("new-name").value = "";
   $("player-list").replaceChildren();
+  const load = ++state.screenLoad;
   let players;
   try {
     players = await getJSON("/api/players");
   } catch (error) {
+    if (load !== state.screenLoad || $("players").hidden) return;  // left or reloaded the screen meanwhile
     $("player-error").textContent = `Could not reach the server (${error.message}).`;
     $("player-list").replaceChildren(menuButton("Retry", showPlayers));
     $("player-list").firstChild.focus();
     return;
   }
-  if ($("players").hidden) return;  // left the screen while the list loaded
+  if (load !== state.screenLoad || $("players").hidden) return;  // left or reloaded the screen meanwhile
   $("player-list").replaceChildren(...players.map((p) => menuButton(p.name, () => pickPlayer(p))));
   if (!$("players").contains(document.activeElement)) {  // don't steal focus from someone typing
     const current = players.findIndex((p) => p.id === state.player?.id);
@@ -110,6 +116,8 @@ async function addPlayer() {
     $("player-error").textContent = "A name is 1-16 letters, digits, spaces, _ . or -";
     return;
   }
+  if (state.addingPlayer) return;  // a second Enter while the first is on its way
+  state.addingPlayer = true;
   let response;
   try {
     response = await fetch("/api/players", {
@@ -120,6 +128,8 @@ async function addPlayer() {
   } catch (error) {
     $("player-error").textContent = `Could not reach the server (${error.message}).`;
     return;
+  } finally {
+    state.addingPlayer = false;
   }
   if (response.status === 409) {
     $("player-error").textContent = "That name is taken.";
@@ -144,6 +154,7 @@ function showHome(focusId) {
   state.countingDown = false;
   state.finished = false;
   state.attempts = [];  // an abandoned test is never saved
+  state.unsaved = null;
   state.current = null;
   showScreen("home");
   $("playing-as").textContent = `playing as ${state.player.name}`;
@@ -185,6 +196,9 @@ function onMenuKey(event) {
     addPlayer();
   } else if (event.key === "Enter" && document.activeElement.tagName === "INPUT") {
     document.activeElement.click();  // tick a box or pick a level (buttons click on Enter by themselves)
+  } else if (!$("players").hidden && !typing && event.key.length === 1 && event.key !== " ") {
+    $("new-name").focus();  // typing a name lands in the name box wherever the highlight is
+    return;
   } else if (event.key === "Escape" && $("home").hidden && state.player) {
     // every menu screen goes back home (the player screen only once someone is playing)
     showHome(`${document.querySelector(".screen:not([hidden])").id}-choice`);
@@ -417,6 +431,7 @@ function onInput() {
 
 function onEnter() {
   if (state.countingDown) return;
+  if (state.finished && state.unsaved) return saveRound();  // the save failed: try again
   if (state.finished || (state.mode === "test" && !state.testEndsAt)) {
     // between rounds, or the test's first load failed. A late Enter from the last answer must
     // not skip straight past the results.
@@ -464,38 +479,69 @@ async function endRound() {
   state.finished = true;
   state.current = null;  // the unfinished question is not recorded
   state.endedAt = performance.now();
-  const attempts = state.attempts;
-  state.attempts = [];  // handed over below, so closing the tab can't send them a second time
+  state.unsaved = state.attempts;
+  state.attempts = [];  // handed over to saveRound, so closing the tab can't send them a second time
   $("question").textContent = state.mode === "test" ? "time!" : "done!";
   input.value = "";
   showSteps([]);
   setFeedback("");
   showAnswerBox(false);
   $("retry").hidden = true;
+  saveRound();
+}
+
+// Browsers refuse keepalive requests over 64KB, so only small saves (a test, a normal practice
+// session) are asked to survive the tab closing.
+const KEEPALIVE_LIMIT = 60000;
+
+async function saveRound() {
+  const session = state.session;
+  if (state.saving?.session === session) return;  // this round is already on its way
+  const attempts = state.unsaved;
+  const body = JSON.stringify({ player_id: state.player.id, mode: state.mode, attempts });
+  const keepalive = body.length < KEEPALIVE_LIMIT;
+  state.saving = { session, keepalive };
+  $("retry").hidden = true;
+  setFeedback("");
   let saved;
   try {
     const response = await fetch("/api/rounds", {
       method: "POST",
-      keepalive: true,
+      keepalive,
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ player_id: state.player.id, mode: state.mode, attempts }),
+      body,
     });
     if (!response.ok) throw new Error(`server said ${response.status}`);
     saved = await response.json();
   } catch (error) {
-    if (session === state.session) setFeedback(`Could not save results (${error.message})`, "wrong");
+    if (session === state.session) {
+      setFeedback(`Could not save results (${error.message}). Enter to retry.`, "wrong");
+      $("retry").hidden = false;
+    }
     return;
+  } finally {
+    if (state.saving?.session === session) state.saving = null;
   }
+  if (state.unsaved === attempts) state.unsaved = null;
   if (session !== state.session) return;  // moved on while it saved
   showResults(saved.summary, saved.best);
 }
 
 // Closing or reloading the tab mid-practice still saves the questions already finished.
+// Beacons in flight are capped at about 64KB in all, so a long session goes in pieces of
+// BEACON_CHUNK attempts until the browser refuses one: the first ~250 questions get through.
+const BEACON_CHUNK = 100;
+
 addEventListener("pagehide", () => {
-  if (state.mode !== "practice" || state.finished || !state.player || state.attempts.length === 0) return;
-  const body = JSON.stringify({ player_id: state.player.id, mode: "practice", attempts: state.attempts });
-  navigator.sendBeacon("/api/rounds", new Blob([body], { type: "application/json" }));
+  if (state.mode !== "practice" || !state.player) return;
+  // a finished round whose save is already on its way with keepalive arrives by itself
+  const attempts = !state.finished ? state.attempts : state.saving?.keepalive ? [] : state.unsaved || [];
+  for (let i = 0; i < attempts.length; i += BEACON_CHUNK) {
+    const body = JSON.stringify({ player_id: state.player.id, mode: "practice", attempts: attempts.slice(i, i + BEACON_CHUNK) });
+    if (!navigator.sendBeacon("/api/rounds", new Blob([body], { type: "application/json" }))) break;
+  }
   state.attempts = [];
+  state.unsaved = null;
 });
 
 const percent = (x) => `${Math.round(x * 100)}%`;
@@ -539,14 +585,16 @@ async function showMyStats() {
   showScreen("my-stats");
   document.querySelector("#my-stats [data-back]").focus();
   $("my-stats-body").textContent = "loading...";
+  const load = ++state.screenLoad;
   let stats;
   try {
     stats = await getJSON(`/api/players/${state.player.id}/stats`);
   } catch (error) {
+    if (load !== state.screenLoad) return;
     $("my-stats-body").textContent = `Could not load your stats (${error.message}).`;
     return;
   }
-  if ($("my-stats").hidden) return;  // left the screen while it loaded
+  if (load !== state.screenLoad || $("my-stats").hidden) return;  // left or reloaded the screen meanwhile
   const t = stats.tests;
   const recent = t.recent
     .map((r) => `<li>${r.score} <small>${new Date(r.at).toLocaleDateString()}</small></li>`)
@@ -568,17 +616,19 @@ async function showLeaderboard() {
   document.querySelector("#leaderboard [data-back]").focus();
   const list = $("leaderboard-list");
   list.replaceChildren(listItem("loading...", "note"));
+  const load = ++state.screenLoad;
   let rows;
   try {
     rows = await getJSON("/api/leaderboard");
   } catch (error) {
+    if (load !== state.screenLoad) return;
     list.replaceChildren(listItem(`Could not load the leaderboard (${error.message}).`, "note"));
     return;
   }
-  if ($("leaderboard").hidden) return;
+  if (load !== state.screenLoad || $("leaderboard").hidden) return;  // left or reloaded the screen meanwhile
   if (rows.length === 0) return list.replaceChildren(listItem("no tests yet", "note"));
   // names are typed by people: listItem puts them in as text
-  list.replaceChildren(...rows.map((r) => listItem(`${r.name} · ${r.best}`, r.id === state.player.id ? "me" : "")));
+  list.replaceChildren(...rows.map((r) => r.id === state.player.id ? listItem(`${r.name} · ${r.best} (you)`, "me") : listItem(`${r.name} · ${r.best}`, "")));
 }
 
 function listItem(text, className) {

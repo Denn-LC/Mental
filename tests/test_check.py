@@ -48,3 +48,10 @@ def test_parse_answer():
     assert parse_answer("") is None
     assert parse_answer("4 5") is None
     assert parse_answer("٤٥") is None  # digits from other scripts are not answers
+
+
+def test_negative_answers_count_with_either_minus():
+    q = make_question("addition", 3, 5)  # -6,874 + 960
+    assert q.answer < 0
+    for typed in [str(q.answer), str(q.answer).replace("-", "−")]:
+        assert checked(record(q, typed))["correct"] is True

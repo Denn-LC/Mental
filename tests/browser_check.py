@@ -50,6 +50,29 @@ def visible(page, element_id):
     return page.evaluate(f"getComputedStyle(document.getElementById('{element_id}')).display !== 'none'")
 
 
+def waited(page, condition, timeout=10000):
+    """True once the page's JS condition holds; False (a FAIL, not a crash) if it never does."""
+    try:
+        page.wait_for_function(condition, timeout=timeout)
+        return True
+    except Exception:
+        return False
+
+
+# Builds n attempt records for real, distinct questions straight into the page (as if n questions
+# were answered right) and returns how many bytes they make as a /api/rounds body.
+FAKE_SESSION = """async (n) => {
+  const batches = await Promise.all([1, 2, 3].map(() => getJSON('/api/questions?difficulty=mixed&count=200')));
+  const questions = batches.flat().slice(0, n);
+  for (const q of questions) state.seen[q.id] = q;
+  state.attempts = questions.map((q) => ({ question_id: q.id, seed: q.seed, text: q.text,
+    category: q.category, strategy: q.strategy, difficulty: q.difficulty, answer: q.answer,
+    given: String(q.answer), correct: true, skipped: false, wrong_tries: [], gave_up: false,
+    time_ms: 1000, mode: 'practice' }));
+  return JSON.stringify({ player_id: state.player.id, mode: 'practice', attempts: state.attempts }).length;
+}"""
+
+
 def saved_count(page):
     """How many attempts the server has saved for the current player."""
     return page.evaluate("""fetch(`/api/players/${state.player.id}/stats`).then((r) => r.json())
@@ -85,6 +108,8 @@ with sync_playwright() as p:
     page.click("#players-choice")
     page.wait_for_function("$('player-list').children.length > 0")
     check("Switch player lists the players, the current one highlighted", focused() == NAME)
+    page.keyboard.type("zz")
+    check("typing on the player screen goes into the name box", focused() == "new-name" and page.input_value("#new-name") == "zz")
     page.fill("#new-name", NAME.upper())
     page.press("#new-name", "Enter")
     page.wait_for_function("$('player-error').textContent !== ''")
@@ -268,6 +293,27 @@ with sync_playwright() as p:
     page.wait_for_timeout(300)
     check("reloading mid-practice still saves what was finished", saved_count(page) == before + 2)
     check("a reload remembers the player", page.text_content("#playing-as") == f"playing as {NAME}")
+    page.keyboard.press("Enter")
+    page.keyboard.press("Enter")
+    playing()
+    before = saved_count(page)
+    size = page.evaluate(FAKE_SESSION, 400)
+    page.click("#quit")
+    check(f"quitting a long practice session ({size // 1000}KB, over the 64KB keepalive cap) saves all of it",
+          size > 64000 and waited(page, "!$('results').hidden && $('results').textContent.includes('400 questions')")
+          and saved_count(page) == before + 400)
+    page.keyboard.press("Escape")
+    page.keyboard.press("Enter")
+    page.keyboard.press("Enter")
+    playing()
+    before = saved_count(page)
+    page.evaluate(FAKE_SESSION, 400)
+    page.reload()
+    home()
+    page.wait_for_timeout(500)
+    after = saved_count(page)
+    check(f"closing the tab on a long session still saves its first pieces ({after - before} of 400)",
+          after - before >= 100 and (after - before) % 100 == 0)
     page.evaluate("localStorage.setItem('mental.player', '987654321')")
     page.reload()
     page.wait_for_selector("#players:not([hidden])")
@@ -372,10 +418,21 @@ with sync_playwright() as p:
     page.keyboard.press("Enter")
     page.wait_for_timeout(300)
     check("...and with Enter", page.evaluate("state.current !== null && state.testEndsAt > 0"))
-    fail(page, "/api/rounds")
+    page.keyboard.type(str(answer()))  # one right answer, so the saved test has a score
+    page.wait_for_timeout(50)
+    fail(page, "/api/rounds", 1)
+    before = saved_count(page)
     page.evaluate("state.testEndsAt = performance.now()")
     page.wait_for_timeout(400)
-    check("a failed save shows a message", "Could not save results" in page.text_content("#feedback"))
+    check("a failed save says so and offers Retry",
+          "Could not save results" in page.text_content("#feedback") and "Enter to retry" in page.text_content("#feedback")
+          and visible(page, "retry"))
+    unsaved = page.evaluate("state.unsaved.length")
+    page.wait_for_timeout(700)  # past the 1-second guard: Enter must retry the save, not start a new round
+    page.keyboard.press("Enter")
+    page.wait_for_selector("#results:not([hidden])")
+    check("Enter after a failed save saves it and shows the results",
+          "score" in page.text_content("#results") and not visible(page, "retry") and saved_count(page) == before + unsaved)
     page.route("**/api/players", lambda route: route.abort())
     page.reload()
     page.wait_for_function("$('player-error').textContent.includes('Could not reach')", timeout=10000)
@@ -383,8 +440,8 @@ with sync_playwright() as p:
           visible(page, "players") and page.text_content("#player-list button") == "Retry")
     page.unroute("**/api/players")
     page.click("#player-list button")
-    page.wait_for_function(f"[...$('player-list').children].some((b) => b.textContent === {json.dumps(NAME)})")
-    check("Retry loads the players", True)
+    check("Retry loads the players",
+          waited(page, f"[...$('player-list').children].some((b) => b.textContent === {json.dumps(NAME)})"))
     page.click(f"#player-list button:text-is('{NAME}')")
 
     # practice with mixed levels
@@ -411,7 +468,7 @@ with sync_playwright() as p:
     page.click("#my-stats-choice")
     page.wait_for_function("!$('my-stats-body').textContent.includes('loading')")
     stats = page.text_content("#my-stats-body")
-    check("My stats shows the test count and best", "1 taken · best" in stats)
+    check("My stats shows the test count and best", "2 taken · best" in stats)
     check("My stats has a per-topic table", page.locator("#my-stats-body table tr").count() > 1)
     page.keyboard.press("Escape")
     check("Esc goes home with My stats highlighted", visible(page, "home") and focused() == "my-stats-choice")
@@ -419,17 +476,22 @@ with sync_playwright() as p:
     check("down from My stats reaches Leaderboard", focused() == "leaderboard-choice")
     page.keyboard.press("Enter")
     page.wait_for_function("!$('leaderboard-list').textContent.includes('loading')")
-    check("the leaderboard lists this player, highlighted",
-          page.evaluate(f"[...document.querySelectorAll('#leaderboard-list li.me')].some((li) => li.textContent.startsWith({json.dumps(NAME)}))"))
+    check("the leaderboard lists this player, highlighted and marked (you)",
+          page.evaluate(f"[...document.querySelectorAll('#leaderboard-list li.me')].some((li) => li.textContent.startsWith({json.dumps(NAME)}) && li.textContent.endsWith('(you)'))"))
     page.click("#leaderboard [data-back]")
     check("Back goes home with Leaderboard highlighted", visible(page, "home") and focused() == "leaderboard-choice")
-    page.route("**/api/leaderboard", lambda route: route.fulfill(json=[{"id": 1, "name": "<img src=x onerror=window.pwned=2>", "best": 99}]))
+    page.route("**/api/leaderboard", lambda route: route.fulfill(json=[{"id": -1, "name": "<img src=x onerror=window.pwned=2>", "best": 99}]))
     page.click("#leaderboard-choice")
     page.wait_for_function("$('leaderboard-list').textContent.includes('99')")
     check("a name on the leaderboard is shown as text, never run as HTML",
           page.text_content("#leaderboard-list li") == "<img src=x onerror=window.pwned=2> · 99"
           and page.evaluate("!document.querySelector('#leaderboard-list img') && window.pwned === undefined"))
     page.unroute("**/api/leaderboard")
+    page.keyboard.press("Escape")
+    page.route("**/api/players/*/stats", lambda route: route.fulfill(status=500, body="down"))
+    page.click("#my-stats-choice")
+    check("My stats says so when it can't load", waited(page, "$('my-stats-body').textContent.includes('Could not load')"))
+    page.unroute("**/api/players/*/stats")
     page.keyboard.press("Escape")
     check("no page errors", not errors)
     print(f"{sum(results)}/{len(results)} passed", errors or "")
