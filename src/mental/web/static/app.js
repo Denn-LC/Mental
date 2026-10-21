@@ -502,7 +502,7 @@ async function saveRound() {
   const keepalive = body.length < KEEPALIVE_LIMIT;
   state.saving = { session, keepalive };
   $("retry").hidden = true;
-  setFeedback("");
+  setFeedback("saving...");
   let saved;
   try {
     const response = await fetch("/api/rounds", {
@@ -510,6 +510,7 @@ async function saveRound() {
       keepalive,
       headers: { "Content-Type": "application/json" },
       body,
+      signal: AbortSignal.timeout(15000),  // a hung server ends in the retry message, not a frozen screen
     });
     if (!response.ok) throw new Error(`server said ${response.status}`);
     saved = await response.json();
@@ -524,6 +525,7 @@ async function saveRound() {
   }
   if (state.unsaved === attempts) state.unsaved = null;
   if (session !== state.session) return;  // moved on while it saved
+  setFeedback("");
   showResults(saved.summary, saved.best);
 }
 
@@ -550,6 +552,7 @@ const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
 // Only numbers and the server's own question text, steps and topic names go into this HTML.
 function showResults(summary, best) {
+  state.endedAt = performance.now();  // the 1-second Enter guard counts from when the results appear
   const o = summary.overall;
   const rows = Object.entries(summary.by_category)
     .map(([name, s]) => `<tr><td>${name}</td><td>${s.score}/${s.count}</td><td>${percent(s.accuracy)}</td><td>${seconds(s.avg_time_ms)}</td></tr>`)

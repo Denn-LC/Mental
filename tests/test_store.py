@@ -21,7 +21,7 @@ def saved(right, wrong=0):
 
 
 def test_new_database_has_schema_version_1(conn):
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 1
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 1 == store.SCHEMA_VERSION
 
 
 def test_players_are_listed_by_name(conn):

@@ -115,6 +115,15 @@ def test_bad_attempt_is_422():
 
 
 @pytest.mark.parametrize("field, value", [
+    ("given", ""), ("given", "-"), ("given", "−465"), ("given", "12345"), ("wrong_tries", ["−4", "-", "99999"]),
+])
+def test_anything_the_answer_box_allows_is_accepted(field, value):
+    ok = records(1)
+    ok[0][field] = value
+    assert save(new_player(), "practice", ok).status_code == 200
+
+
+@pytest.mark.parametrize("field, value", [
     ("given", "12a"), ("given", "1234567"), ("wrong_tries", ["hello"]),
     ("seed", -1), ("difficulty", 4), ("answer", 100_000),
 ])
