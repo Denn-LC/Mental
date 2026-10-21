@@ -93,8 +93,10 @@ def connect(path=None):
 
 def upgrade(conn, path):
     """Bring the file to SCHEMA_VERSION. A version 1 file is backed up first, then cleared."""
-    if conn.execute("PRAGMA user_version").fetchone()[0] == 1:
-        backup = sqlite3.connect(path.with_name(path.name + ".v1-backup"))
+    backup_path = path.with_name(path.name + ".v1-backup")
+    # never overwrite: a second connection upgrading at the same moment must not replace a good v1 copy
+    if conn.execute("PRAGMA user_version").fetchone()[0] == 1 and not backup_path.exists():
+        backup = sqlite3.connect(backup_path)
         try:
             conn.backup(backup)
         finally:

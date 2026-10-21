@@ -221,3 +221,14 @@ def test_upgrading_a_v1_database_backs_it_up_and_clears_old_players(tmp_path):
     assert backup.execute("SELECT name FROM players").fetchall() == [("old player",)]
     assert backup.execute("PRAGMA user_version").fetchone()[0] == 1
     backup.close()
+
+
+def test_an_existing_backup_is_never_overwritten(tmp_path):
+    path = tmp_path / "mental.db"
+    backup_path = tmp_path / "mental.db.v1-backup"
+    backup_path.write_bytes(b"the first backup")
+    old = sqlite3.connect(path)
+    old.executescript(V1_DATABASE)
+    old.close()
+    store.connect(path).close()
+    assert backup_path.read_bytes() == b"the first backup"
