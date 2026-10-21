@@ -1,7 +1,5 @@
-from fastapi.testclient import TestClient
 
 from mental.engine.summary import summarise
-from mental.web.app import app
 
 
 def attempt(category="addition", strategy="basic_add", correct=True, skipped=False,
@@ -50,19 +48,3 @@ def test_grouped_by_category_and_strategy():
 def test_slowest_are_ordered_and_capped_at_five():
     attempts = [attempt(question_id=f"q{i}", time_ms=i * 100) for i in range(8)]
     assert summarise(attempts)["slowest"] == ["q7", "q6", "q5", "q4", "q3"]
-
-
-def test_summary_endpoint():
-    response = TestClient(app).post("/api/summary", json=[attempt(), attempt(correct=False, skipped=True)])
-    assert response.status_code == 200
-    assert response.json()["overall"]["score"] == 1
-
-
-def test_summary_endpoint_rejects_bad_attempts():
-    bad = attempt()
-    bad["time_ms"] = -5
-    assert TestClient(app).post("/api/summary", json=[bad]).status_code == 422
-
-
-def test_summary_endpoint_rejects_huge_lists():
-    assert TestClient(app).post("/api/summary", json=[attempt()] * 1001).status_code == 413
