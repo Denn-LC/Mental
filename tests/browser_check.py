@@ -1,19 +1,23 @@
-"""Drive the page in a headless browser and check the keyboard flows and race fixes.
+"""Drive the page in a headless browser and check the keyboard flows, saving and race fixes.
 
-Not part of `pytest` (it needs a running server and a browser):
+Not part of `pytest` (it needs a running server and a browser). Give the server a database of its
+own, so the check never writes players into your real one:
 
-    uv run mental                                   # in one terminal
-    uv run --with playwright python tests/browser_check.py http://127.0.0.1:8000/
+    MENTAL_DB=$(mktemp -d)/check.db uv run uvicorn mental.web.app:app --port 8765   # one terminal
+    uv run --with playwright python tests/browser_check.py http://127.0.0.1:8765/
 
 Set CHROMIUM=/path/to/chrome to use a browser Playwright didn't install itself.
 """
+import json
 import os
+import random
 import sys
 
 from playwright.sync_api import sync_playwright
 
-URL = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8000/"
+URL = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8765/"
 EXE = os.environ.get("CHROMIUM")
+NAME = f"check{random.randint(1000, 9999)}"  # a new player every run
 results, errors = [], []
 
 
@@ -46,6 +50,12 @@ def visible(page, element_id):
     return page.evaluate(f"getComputedStyle(document.getElementById('{element_id}')).display !== 'none'")
 
 
+def saved_count(page):
+    """How many attempts the server has saved for the current player."""
+    return page.evaluate("""fetch(`/api/players/${state.player.id}/stats`).then((r) => r.json())
+        .then((s) => Object.values(s.by_category).reduce((n, c) => n + c.count, 0))""")
+
+
 with sync_playwright() as p:
     browser = p.chromium.launch(executable_path=EXE) if EXE else p.chromium.launch()
     page = browser.new_page(viewport={"width": 900, "height": 900})
@@ -54,32 +64,66 @@ with sync_playwright() as p:
     answer = lambda: page.evaluate("state.current.answer")
     playing = lambda: page.wait_for_function("state.current && !state.countingDown", timeout=10000)
     running = lambda: page.wait_for_function("state.testEndsAt > 0", timeout=10000)
-    focused = lambda: page.evaluate("document.activeElement.dataset.mode || document.activeElement.id || document.activeElement.value")
+    focused = lambda: page.evaluate("(({ dataset, id, value, textContent }) => dataset.mode || id || value || textContent)(document.activeElement)")
+    home = lambda: page.wait_for_selector("#home:not([hidden])")
+
+    # players
+    page.wait_for_selector("#players:not([hidden])")
+    check("a new browser is asked who's playing", visible(page, "players") and not visible(page, "home"))
+    page.focus("#new-name")
+    page.keyboard.type("no <tags>")
+    page.keyboard.press("Enter")
+    check("a bad name gets a message and stays", "1-16 letters" in page.text_content("#player-error") and visible(page, "players"))
+    page.fill("#new-name", "")
+    page.keyboard.type(NAME)
+    page.keyboard.press("ArrowLeft")
+    check("left/right in the name box move the caret, not the highlight", focused() == "new-name")
+    page.keyboard.press("Enter")
+    home()
+    check("a new name goes home playing as it, Practice highlighted",
+          page.text_content("#playing-as") == f"playing as {NAME}" and focused() == "practice")
+    page.click("#players-choice")
+    page.wait_for_function("$('player-list').children.length > 0")
+    check("Switch player lists the players, the current one highlighted", focused() == NAME)
+    page.fill("#new-name", NAME.upper())
+    page.press("#new-name", "Enter")
+    page.wait_for_function("$('player-error').textContent !== ''")
+    check("a taken name (in any case) gets a message", "taken" in page.text_content("#player-error"))
+    page.keyboard.press("Escape")
+    check("Esc on the player screen goes home, Switch player highlighted", visible(page, "home") and focused() == "players-choice")
+    page.route("**/api/players", lambda route: route.fulfill(json=[{"id": 1, "name": "<img src=x onerror=window.pwned=1>"}]))
+    page.click("#players-choice")
+    page.wait_for_function("$('player-list').children.length > 0")
+    check("a name is shown as text, never run as HTML",
+          page.text_content("#player-list button") == "<img src=x onerror=window.pwned=1>"
+          and page.evaluate("!document.querySelector('#player-list img') && window.pwned === undefined"))
+    page.unroute("**/api/players")
+    page.keyboard.press("Escape")
+    page.focus("[data-mode=practice]")
 
     # home screen
-    check("opens on home with Free Play highlighted", visible(page, "home") and not visible(page, "game") and focused() == "free")
     check("the title is near the top (not touching it), centred",
           page.evaluate("(() => { const r = document.querySelector('h1').getBoundingClientRect(); return r.top > 40 && r.top < 100 && Math.abs(r.left + r.width / 2 - innerWidth / 2) < 5; })()"))
-    check("the home buttons sit in the middle of the screen", centre_y(page, "#home .choice:last-of-type") < 0.1)
+    check("the home menu sits in the middle of the screen", centre_y(page, "#home") < 0.1)
     page.keyboard.press("ArrowDown")
     check("arrow down highlights Test Yourself", focused() == "test")
-    page.keyboard.press("ArrowDown")
     page.keyboard.press("ArrowRight")
-    check("arrows stop at the edge instead of wrapping", focused() == "test")
+    check("arrows stop at the side instead of wrapping", focused() == "test")
     page.keyboard.press("ArrowUp")
-    check("arrow up goes back up", focused() == "free")
+    page.keyboard.press("ArrowUp")
+    check("arrow up goes back up and stops at the top", focused() == "practice")
     test_box = page.locator("[data-mode=test]").bounding_box()
     page.hover("[data-mode=test]")
     check("the highlight follows the mouse", focused() == "test")
     page.keyboard.press("ArrowUp")
     page.keyboard.down("Enter")
-    check("Enter on Free Play opens its options, Play highlighted", visible(page, "options") and focused() == "play")
+    check("Enter on Practice opens its options, Play highlighted", visible(page, "options") and focused() == "play")
     page.keyboard.down("Enter")  # the key is still held: this one is a repeat
     page.keyboard.up("Enter")
     check("holding Enter doesn't run on into Play", visible(page, "options") and focused() == "play")
     check("the options sit in the middle of the screen", centre_y(page, "#options fieldset:last-of-type") < 0.1)
 
-    # free play options: the arrows move the way they point (topics are a 3 x 2 grid at this width)
+    # practice options: the arrows move the way they point (topics are a 3 x 2 grid at this width)
     page.keyboard.press("ArrowUp")
     check("up from Play reaches a level", focused() in ("1", "2", "3", "mixed"))
     page.keyboard.press("ArrowUp")
@@ -113,7 +157,7 @@ with sync_playwright() as p:
     page.click("#play")
     check("Play starts a 3-2-1 countdown", page.text_content("#question") == "3" and page.evaluate("state.countingDown"))
     check("no answer box or buttons during the countdown",
-          not visible(page, "answer") and not visible(page, "free-buttons") and not visible(page, "test-buttons"))
+          not visible(page, "answer") and not visible(page, "practice-buttons") and not visible(page, "test-buttons"))
     countdown_at = centre_y(page, "#question")
     check("the countdown number is big and in the middle of the screen",
           page.evaluate("parseFloat(getComputedStyle($('question')).fontSize) >= 64") and countdown_at < 0.06)
@@ -121,9 +165,9 @@ with sync_playwright() as p:
     page.keyboard.press("Enter")
     check("Enter during the countdown does nothing", page.evaluate("state.countingDown && state.attempts.length === 0"))
     playing()
-    check("then a question, with the chosen settings", page.text_content("#settings") == "free play · multiplication · level 2" and page.input_value("#answer") == "")
-    check("the answer box and Free Play's buttons appear with the question",
-          visible(page, "answer") and visible(page, "free-buttons") and not visible(page, "test-buttons"))
+    check("then a question, with the chosen settings", page.text_content("#settings") == "practice · multiplication · level 2" and page.input_value("#answer") == "")
+    check("the answer box and Practice's buttons appear with the question",
+          visible(page, "answer") and visible(page, "practice-buttons") and not visible(page, "test-buttons"))
     check("the answer box appears where the countdown was", centre_y(page, "#answer") < 0.06)
     page.keyboard.type("1234567")
     check("the answer box takes at most 5 digits", page.input_value("#answer") == "12345")
@@ -135,7 +179,7 @@ with sync_playwright() as p:
     check("home and options are hidden during play", not visible(page, "home") and not visible(page, "options"))
     check("all text uses the pixel font", page.evaluate("[...document.querySelectorAll('body *')].every((el) => getComputedStyle(el).fontFamily.includes('Press Start 2P'))"))
 
-    # free play
+    # practice
     page.keyboard.type(str(answer() * 5))
     page.keyboard.press("Enter")
     way = page.text_content("#feedback")
@@ -143,7 +187,7 @@ with sync_playwright() as p:
     page.keyboard.type(str(answer() + 1))
     page.keyboard.press("Enter")
     close = page.text_content("#feedback")
-    check(f"free play: far answer gets a 'way off' line ({way!r}), off-by-one a close one ({close!r})",
+    check(f"practice: far answer gets a 'way off' line ({way!r}), off-by-one a close one ({close!r})",
           way in ["are you even trying?", "jesus.", "that's not even close", "...what?", "bold guess"]
           and close in ["almost!", "so close", "nearly there", "off by a hair"])
     page.keyboard.press("Tab")
@@ -172,18 +216,71 @@ with sync_playwright() as p:
         check(f"longest question stays on one line at {width}px",
               page.evaluate("$('question').getClientRects().length === 1 && $('question').offsetHeight < 80 && document.documentElement.scrollWidth <= innerWidth"))
     page.set_viewport_size({"width": 900, "height": 900})
+
+    # quitting practice
+    page.evaluate("nextQuestion()")  # a real question again after the made-up one
+    page.keyboard.press("Tab")  # give it up, so it is saved too
+    before = saved_count(page)
+    done = page.evaluate("state.attempts.length")
+    page.evaluate("state.queue = []")
+    delay(page, "/api/questions", 600)
+    page.keyboard.press("Enter")  # next question: a slow refill starts...
+    page.keyboard.press("Escape")  # ...and Esc quits before it lands
+    page.wait_for_selector("#results:not([hidden])")
+    summary = page.text_content("#results")
+    check("Esc quits practice and shows its summary", "practice done" in summary and f"{done} questions" in summary)
+    check("the summary has times per topic and the slowest questions", "avg" in summary and "slowest" in summary)
+    page.keyboard.press("Enter")
+    page.wait_for_timeout(200)
+    check("Enter right after quitting keeps the summary", visible(page, "results"))
+    page.wait_for_timeout(900)  # the slow refill lands in here
+    check("a refill landing after quitting shows nothing",
+          page.text_content("#question") == "done!" and page.evaluate("state.current === null") and visible(page, "results"))
+    check("the session was saved once", saved_count(page) == before + done)
+    page.keyboard.press("Enter")
+    check("Enter a second later practises again with the same settings",
+          page.text_content("#question") == "3" and page.text_content("#settings") == "practice · multiplication · level 2")
+    playing()
     page.mouse.move(test_box["x"] + 20, test_box["y"] + 20)  # rest the pointer where Test Yourself will appear
     page.keyboard.press("Escape")
     page.wait_for_timeout(300)
-    check("Esc in a game goes home with Free Play highlighted, even under a resting pointer",
-          visible(page, "home") and focused() == "free")
+    check("Esc with nothing answered goes straight home, Practice highlighted even under a resting pointer",
+          visible(page, "home") and focused() == "practice")
+    page.keyboard.press("Enter")
+    page.keyboard.press("Enter")
+    playing()
+    page.keyboard.press("Tab")
+    page.click("#quit")
+    page.wait_for_selector("#results:not([hidden])")
+    check("the Quit button quits too", "1 question ·" in page.text_content("#results"))
+    page.keyboard.press("Escape")
+    check("Esc on the summary goes home", visible(page, "home"))
+    page.keyboard.press("Enter")
+    page.keyboard.press("Enter")
+    playing()
+    before = saved_count(page)
+    for _ in range(2):
+        page.keyboard.press("Tab")
+        page.keyboard.press("Enter")
+        playing()
+    page.reload()
+    home()
+    page.wait_for_timeout(300)
+    check("reloading mid-practice still saves what was finished", saved_count(page) == before + 2)
+    check("a reload remembers the player", page.text_content("#playing-as") == f"playing as {NAME}")
+    page.evaluate("localStorage.setItem('mental.player', '987654321')")
+    page.reload()
+    page.wait_for_selector("#players:not([hidden])")
+    check("a remembered player that no longer exists gets asked again", visible(page, "players"))
+    page.click(f"#player-list button:text-is('{NAME}')")
+    check("picking a player from the list goes home as them", page.text_content("#playing-as") == f"playing as {NAME}")
 
     # test mode
     page.keyboard.press("ArrowDown")
     page.keyboard.press("Enter")
     check("Test Yourself goes straight to the countdown (no options)", visible(page, "game") and page.text_content("#question") == "3")
     running()
-    check("test mode shows a Skip button, not Free Play's buttons", visible(page, "test-buttons") and not visible(page, "free-buttons"))
+    check("test mode shows a Skip button, not Practice's buttons", visible(page, "test-buttons") and not visible(page, "practice-buttons"))
     check("timer starts at 2:00 after the countdown", page.text_content("#timer") in ("2:00", "1:59"))
     check("test mixes all topics and levels",
           page.evaluate("new Set(state.queue.map((q) => q.difficulty)).size === 3 && new Set(state.queue.map((q) => q.category)).size === 6"))
@@ -220,6 +317,7 @@ with sync_playwright() as p:
     page.evaluate("state.testEndsAt = performance.now()")  # ...and the time runs out before it lands
     page.wait_for_selector("#results:not([hidden])")
     check("results appear after time", "score" in page.text_content("#results"))
+    check("a first test says so", "first test · best" in page.text_content("#results"))
     check("no answer box or Skip button once the time is up", not visible(page, "answer") and not visible(page, "test-buttons"))
     page.keyboard.press("Enter")
     page.wait_for_timeout(200)
@@ -236,8 +334,9 @@ with sync_playwright() as p:
 
     # failures
     page.reload()
+    home()
     fail(page, "/api/questions", 1)
-    page.click("[data-mode=free]")
+    page.click("[data-mode=practice]")
     page.click("#play")
     page.wait_for_function("$('feedback').textContent.includes('Could not load')", timeout=10000)
     check("failed load says so and offers retry", "Enter to retry" in page.text_content("#feedback") and visible(page, "retry"))
@@ -261,27 +360,38 @@ with sync_playwright() as p:
     page.keyboard.press("Enter")
     page.wait_for_timeout(300)
     check("...and with Enter", page.evaluate("state.current !== null && state.testEndsAt > 0"))
-    fail(page, "/api/summary")
+    fail(page, "/api/rounds")
     page.evaluate("state.testEndsAt = performance.now()")
     page.wait_for_timeout(400)
-    check("results failure shows a message", "Could not load results" in page.text_content("#feedback"))
-
-    # free play with mixed levels
+    check("a failed save shows a message", "Could not save results" in page.text_content("#feedback"))
+    page.route("**/api/players", lambda route: route.abort())
     page.reload()
-    page.click("[data-mode=free]")
+    page.wait_for_function("$('player-error').textContent.includes('Could not reach')", timeout=10000)
+    check("server down at load: says so and offers Retry",
+          visible(page, "players") and page.text_content("#player-list button") == "Retry")
+    page.unroute("**/api/players")
+    page.click("#player-list button")
+    page.wait_for_function(f"[...$('player-list').children].some((b) => b.textContent === {json.dumps(NAME)})")
+    check("Retry loads the players", True)
+    page.click(f"#player-list button:text-is('{NAME}')")
+
+    # practice with mixed levels
+    page.reload()
+    home()
+    page.click("[data-mode=practice]")
     page.click("label:has(input[name=level][value=mixed])")
     page.click("#play")
     playing()
-    check("Free Play can mix levels", page.text_content("#settings") == "free play · mixed · all levels"
+    check("Practice can mix levels", page.text_content("#settings") == "practice · mixed · all levels"
           and page.evaluate("new Set([state.current, ...state.queue].map((q) => q.difficulty)).size") == 3)
     for width in [900, 400]:
         page.set_viewport_size({"width": width, "height": 800})
         page.keyboard.press("Escape")
-        page.click("[data-mode=free]")
+        page.click("[data-mode=practice]")
         check(f"the four levels fit at {width}px", page.evaluate("document.documentElement.scrollWidth <= innerWidth"))
         page.keyboard.press("Escape")
+    page.set_viewport_size({"width": 900, "height": 900})
 
     check("no page errors", not errors)
     print(f"{sum(results)}/{len(results)} passed", errors or "")
     browser.close()
-    sys.exit(0 if all(results) else 1)

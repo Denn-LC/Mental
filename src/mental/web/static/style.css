@@ -56,7 +56,7 @@ main {
 
 /* the menus sit in the middle of the screen; auto margins (not justify-content) so a tall
    screen still scrolls from the top instead of being cut off */
-#home, #options { margin-block: auto; }
+#home, #options, #players { margin-block: auto; }
 
 #question { font-size: clamp(16px, 4vw, 30px); text-align: center; line-height: 1.4; white-space: nowrap; }
 /* In a game the question and answer box sit so the box is in the middle of the screen, and the
@@ -120,7 +120,7 @@ button {
 }
 button:focus-visible { outline: 3px solid var(--text); outline-offset: 2px; }
 button:disabled { opacity: 0.4; cursor: default; }
-#menu-error { color: var(--wrong); min-height: 1.8em; }
+.error { color: var(--wrong); min-height: 1.8em; text-align: center; }
 
 /* the highlighted menu item (keyboard or mouse) */
 .choice { width: min(400px, 100%); font-size: 14px; padding: 16px 24px; }
@@ -128,6 +128,23 @@ button:disabled { opacity: 0.4; cursor: default; }
 label:has(input:focus) { color: var(--accent); outline: 2px solid var(--accent); outline-offset: 4px; }
 input[type=checkbox], input[type=radio] { accent-color: var(--accent); }
 ::selection { background: var(--accent); color: var(--bg); }
+
+/* players and the screens that only list things */
+.screen > h2 { color: var(--accent); font-size: 16px; margin: 0; }
+#playing-as { color: var(--dim); margin: 0; }
+#player-list { width: 100%; display: flex; flex-direction: column; align-items: center; gap: 12px; }
+#new-name {
+  font: inherit;
+  width: 16em;
+  max-width: 100%;
+  padding: 12px;
+  color: var(--text);
+  background: var(--panel);
+  border: 3px solid var(--dim);
+  outline: none;
+}
+#new-name:focus { border-color: var(--accent); }
+#results .best { color: var(--accent); }
 
 @media (prefers-reduced-motion: reduce) {
   * { animation: none !important; transition: none !important; }

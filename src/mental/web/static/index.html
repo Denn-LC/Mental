@@ -11,9 +11,22 @@
     <h1>mental</h1>
   </header>
   <main>
-    <section id="home" class="screen">
-      <button class="choice" data-nav data-mode="free">Free Play</button>
+    <section id="players" class="screen" hidden>
+      <h2>who's playing?</h2>
+      <div id="player-list"></div>
+      <div class="buttons">
+        <input id="new-name" data-nav maxlength="16" placeholder="new player" aria-label="new player's name" autocomplete="off" spellcheck="false">
+        <button id="add-player" data-nav>Add</button>
+      </div>
+      <p id="player-error" class="error" aria-live="polite"></p>
+      <p class="keys">arrows choose · Enter go · type a new name and Enter to add</p>
+    </section>
+
+    <section id="home" class="screen" hidden>
+      <p id="playing-as"></p>
+      <button class="choice" data-nav data-mode="practice">Practice</button>
       <button class="choice" data-nav data-mode="test">Test Yourself · 2 min</button>
+      <button class="choice" data-nav id="players-choice">Switch player</button>
       <p class="keys">arrows choose · Enter go</p>
     </section>
 
@@ -35,7 +48,7 @@
         <label><input type="radio" data-nav name="level" value="mixed"> mixed</label>
       </fieldset>
       <button id="play" class="choice" data-nav>Play</button>
-      <p id="menu-error" aria-live="polite"></p>
+      <p id="menu-error" class="error" aria-live="polite"></p>
       <p class="keys">arrows move · Enter/Space tick · Esc back</p>
     </section>
 
@@ -44,9 +57,10 @@
       <p id="stats"><span id="timer"></span> <span id="score">score 0</span> <span id="streak">streak 0</span></p>
       <div id="question"></div>
       <input id="answer" aria-label="answer" inputmode="numeric" autocomplete="off" spellcheck="false">
-      <div id="free-buttons" class="buttons">
+      <div id="practice-buttons" class="buttons">
         <button id="submit">Enter</button>
         <button id="give-up">Give up</button>
+        <button id="quit">Quit</button>
       </div>
       <div id="test-buttons" class="buttons">
         <button id="skip">Skip</button>

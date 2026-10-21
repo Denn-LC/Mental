@@ -134,13 +134,5 @@ def get_leaderboard(conn: Database):
     return store.leaderboard(conn)
 
 
-@app.post("/api/summary")
-def post_summary(attempts: list[Attempt]):
-    """v1.1's results call; removed in Task 4 once the page saves rounds instead."""
-    if len(attempts) > 1000:
-        raise HTTPException(413, "too many attempts")
-    return summarise([a.model_dump() for a in attempts])
-
-
 # Mounted last so it doesn't swallow the /api routes.
 app.mount("/", StaticFiles(directory=Path(__file__).parent / "static", html=True), name="static")
