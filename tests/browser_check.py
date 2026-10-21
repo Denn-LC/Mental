@@ -72,8 +72,11 @@ with sync_playwright() as p:
     page.hover("[data-mode=test]")
     check("the highlight follows the mouse", focused() == "test")
     page.keyboard.press("ArrowUp")
-    page.keyboard.press("Enter")
+    page.keyboard.down("Enter")
     check("Enter on Free Play opens its options, Play highlighted", visible(page, "options") and focused() == "play")
+    page.keyboard.down("Enter")  # the key is still held: this one is a repeat
+    page.keyboard.up("Enter")
+    check("holding Enter doesn't run on into Play", visible(page, "options") and focused() == "play")
     check("the options sit in the middle of the screen", centre_y(page, "#options fieldset:last-of-type") < 0.1)
 
     # free play options: the arrows move the way they point (topics are a 3 x 2 grid at this width)

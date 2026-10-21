@@ -432,6 +432,8 @@ function showSteps(lines) {
 
 document.addEventListener("keydown", (event) => {
   if (event.ctrlKey || event.metaKey || event.altKey) return;
+  // a held Enter must not run on into the next screen (home -> options -> Play)
+  if (event.key === "Enter" && event.repeat) return event.preventDefault();
   if ($("game").hidden) return onMenuKey(event);
   const key = event.key;
   if (key === "Escape") showHome();
