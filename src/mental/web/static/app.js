@@ -143,6 +143,7 @@ function showHome(focusId) {
   state.loading = false;
   state.countingDown = false;
   state.finished = false;
+  state.attempts = [];  // an abandoned test is never saved
   state.current = null;
   showScreen("home");
   $("playing-as").textContent = `playing as ${state.player.name}`;

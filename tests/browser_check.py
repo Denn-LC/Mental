@@ -332,6 +332,18 @@ with sync_playwright() as p:
     check("Esc during the countdown leaves no round running",
           visible(page, "home") and page.evaluate("state.testEndsAt === 0 && state.current === null"))
 
+    before = saved_count(page)
+    page.click("[data-mode=test]")
+    running()
+    page.keyboard.type(str(answer()))
+    page.wait_for_timeout(50)
+    page.keyboard.press("Escape")
+    page.click("[data-mode=practice]")
+    page.reload()
+    home()
+    page.wait_for_timeout(300)
+    check("an abandoned test is never saved, even if the tab closes later", saved_count(page) == before)
+
     # failures
     page.reload()
     home()
@@ -395,3 +407,4 @@ with sync_playwright() as p:
     check("no page errors", not errors)
     print(f"{sum(results)}/{len(results)} passed", errors or "")
     browser.close()
+    sys.exit(0 if all(results) else 1)
