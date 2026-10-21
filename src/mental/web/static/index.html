@@ -26,6 +26,8 @@
       <p id="playing-as"></p>
       <button class="choice" data-nav data-mode="practice">Practice</button>
       <button class="choice" data-nav data-mode="test">Test Yourself · 2 min</button>
+      <button class="choice" data-nav id="my-stats-choice">My stats</button>
+      <button class="choice" data-nav id="leaderboard-choice">Leaderboard</button>
       <button class="choice" data-nav id="players-choice">Switch player</button>
       <p class="keys">arrows choose · Enter go</p>
     </section>
@@ -52,6 +54,18 @@
       <p class="keys">arrows move · Enter/Space tick · Esc back</p>
     </section>
 
+    <section id="my-stats" class="screen" hidden>
+      <h2>my stats</h2>
+      <div id="my-stats-body" class="panel"></div>
+      <button class="choice" data-nav data-back>Back</button>
+    </section>
+
+    <section id="leaderboard" class="screen" hidden>
+      <h2>leaderboard</h2>
+      <ol id="leaderboard-list" class="panel"></ol>
+      <button class="choice" data-nav data-back>Back</button>
+    </section>
+
     <section id="game" class="screen" hidden>
       <p id="settings"></p>
       <p id="stats"><span id="timer"></span> <span id="score">score 0</span> <span id="streak">streak 0</span></p>
@@ -68,7 +82,7 @@
       <div class="buttons"><button id="retry" hidden>Retry</button></div>
       <div id="feedback" aria-live="polite"></div>
       <ol id="steps"></ol>
-      <section id="results" hidden></section>
+      <section id="results" class="panel" hidden></section>
       <p id="keys" class="keys"></p>
     </section>
   </main>

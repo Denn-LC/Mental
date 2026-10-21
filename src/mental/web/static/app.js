@@ -532,6 +532,61 @@ function bestLine(score, best) {
   return `best ${best.best}`;
 }
 
+// --- my stats and the leaderboard --------------------------------------------
+
+async function showMyStats() {
+  showScreen("my-stats");
+  document.querySelector("#my-stats [data-back]").focus();
+  $("my-stats-body").textContent = "loading...";
+  let stats;
+  try {
+    stats = await getJSON(`/api/players/${state.player.id}/stats`);
+  } catch (error) {
+    $("my-stats-body").textContent = `Could not load your stats (${error.message}).`;
+    return;
+  }
+  if ($("my-stats").hidden) return;  // left the screen while it loaded
+  const t = stats.tests;
+  const recent = t.recent
+    .map((r) => `<li>${r.score} <small>${new Date(r.at).toLocaleDateString()}</small></li>`)
+    .join("");
+  const rows = Object.entries(stats.by_category)
+    .map(([name, s]) => `<tr><td>${name}</td><td>${s.count}</td><td>${s.score}</td><td>${percent(s.accuracy)}</td><td>${seconds(s.avg_time_ms)}</td></tr>`)
+    .join("");
+  // only numbers, dates and the server's topic names go into this HTML: nothing anyone typed
+  $("my-stats-body").innerHTML = `
+    <h3>tests</h3>
+    <p>${t.count ? `${t.count} taken · best ${t.best}` : "no tests yet"}</p>
+    ${recent ? `<ol>${recent}</ol>` : ""}
+    <h3>by topic</h3>
+    ${rows ? `<table><tr><th>topic</th><th>done</th><th>solved</th><th>first try</th><th>avg</th></tr>${rows}</table>` : "<p>nothing played yet</p>"}`;
+}
+
+async function showLeaderboard() {
+  showScreen("leaderboard");
+  document.querySelector("#leaderboard [data-back]").focus();
+  const list = $("leaderboard-list");
+  list.replaceChildren(listItem("loading...", "note"));
+  let rows;
+  try {
+    rows = await getJSON("/api/leaderboard");
+  } catch (error) {
+    list.replaceChildren(listItem(`Could not load the leaderboard (${error.message}).`, "note"));
+    return;
+  }
+  if ($("leaderboard").hidden) return;
+  if (rows.length === 0) return list.replaceChildren(listItem("no tests yet", "note"));
+  // names are typed by people: listItem puts them in as text
+  list.replaceChildren(...rows.map((r) => listItem(`${r.name} · ${r.best}`, r.id === state.player.id ? "me" : "")));
+}
+
+function listItem(text, className) {
+  const li = document.createElement("li");
+  li.textContent = text;
+  li.className = className;
+  return li;
+}
+
 // --- display -----------------------------------------------------------------
 
 function renderSettings() {
@@ -610,6 +665,11 @@ for (const item of document.querySelectorAll("[data-nav]")) followMouse(item);
 $("play").addEventListener("click", playPractice);
 $("add-player").addEventListener("click", addPlayer);
 $("players-choice").addEventListener("click", () => showPlayers());
+$("my-stats-choice").addEventListener("click", showMyStats);
+$("leaderboard-choice").addEventListener("click", showLeaderboard);
+for (const back of document.querySelectorAll("[data-back]")) {
+  back.addEventListener("click", () => showHome(`${back.closest(".screen").id}-choice`));
+}
 $("submit").addEventListener("click", () => { onEnter(); input.focus(); });
 $("give-up").addEventListener("click", () => { giveUp(); input.focus(); });
 $("quit").addEventListener("click", () => quitPractice());

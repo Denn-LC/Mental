@@ -404,6 +404,33 @@ with sync_playwright() as p:
         page.keyboard.press("Escape")
     page.set_viewport_size({"width": 900, "height": 900})
 
+    # my stats and the leaderboard
+    page.reload()
+    home()
+    check("home lists My stats and Leaderboard", visible(page, "my-stats-choice") and visible(page, "leaderboard-choice"))
+    page.click("#my-stats-choice")
+    page.wait_for_function("!$('my-stats-body').textContent.includes('loading')")
+    stats = page.text_content("#my-stats-body")
+    check("My stats shows the test count and best", "1 taken · best" in stats)
+    check("My stats has a per-topic table", page.locator("#my-stats-body table tr").count() > 1)
+    page.keyboard.press("Escape")
+    check("Esc goes home with My stats highlighted", visible(page, "home") and focused() == "my-stats-choice")
+    page.keyboard.press("ArrowDown")
+    check("down from My stats reaches Leaderboard", focused() == "leaderboard-choice")
+    page.keyboard.press("Enter")
+    page.wait_for_function("!$('leaderboard-list').textContent.includes('loading')")
+    check("the leaderboard lists this player, highlighted",
+          page.evaluate(f"[...document.querySelectorAll('#leaderboard-list li.me')].some((li) => li.textContent.startsWith({json.dumps(NAME)}))"))
+    page.click("#leaderboard [data-back]")
+    check("Back goes home with Leaderboard highlighted", visible(page, "home") and focused() == "leaderboard-choice")
+    page.route("**/api/leaderboard", lambda route: route.fulfill(json=[{"id": 1, "name": "<img src=x onerror=window.pwned=2>", "best": 99}]))
+    page.click("#leaderboard-choice")
+    page.wait_for_function("$('leaderboard-list').textContent.includes('99')")
+    check("a name on the leaderboard is shown as text, never run as HTML",
+          page.text_content("#leaderboard-list li") == "<img src=x onerror=window.pwned=2> · 99"
+          and page.evaluate("!document.querySelector('#leaderboard-list img') && window.pwned === undefined"))
+    page.unroute("**/api/leaderboard")
+    page.keyboard.press("Escape")
     check("no page errors", not errors)
     print(f"{sum(results)}/{len(results)} passed", errors or "")
     browser.close()
