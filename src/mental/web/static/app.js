@@ -476,6 +476,7 @@ async function endRound() {
   try {
     const response = await fetch("/api/rounds", {
       method: "POST",
+      keepalive: true,
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ player_id: state.player.id, mode: state.mode, attempts }),
     });

@@ -146,3 +146,13 @@ def test_leaderboard_endpoint():
 def test_pages_and_answers_are_not_cached():
     for path in ["/", "/app.js", "/api/players"]:
         assert client.get(path).headers["cache-control"] == "no-cache", path
+
+
+def test_unencodable_text_is_422_not_500():
+    body = b'{"name": "a\\ud800"}'
+    response = client.post("/api/players", content=body, headers={"Content-Type": "application/json"})
+    assert response.status_code == 422
+
+
+def test_a_round_cannot_repeat_a_question():
+    assert save(new_player(), "test", records(1) * 2).status_code == 400

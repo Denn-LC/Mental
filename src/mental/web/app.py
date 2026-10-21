@@ -5,6 +5,8 @@ from typing import Annotated, Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi import Path as InPath
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -18,6 +20,14 @@ app = FastAPI(title="mental")
 # 1-16 letters, digits, spaces, _ . - and no space at either end (app.js uses the same rule)
 NAME = r"^[A-Za-z0-9_.-]([A-Za-z0-9 _.-]{0,14}[A-Za-z0-9_.-])?$"
 MAX_ID = 2**63 - 1  # the biggest integer SQLite stores; anything bigger can't be a real id
+
+
+@app.exception_handler(RequestValidationError)
+async def invalid_body(request, error):
+    """Report only where and why; the default reply echoes the input, and a lone surrogate in it can't be encoded (500)."""
+    return JSONResponse(
+        {"detail": [{"loc": e["loc"], "msg": e["msg"]} for e in error.errors()]}, status_code=422
+    )
 
 
 @app.middleware("http")
@@ -106,6 +116,9 @@ def post_round(body: Round, conn: Database):
     """Save a finished test or practice session; return its summary and, for a test, the best."""
     if not store.player_exists(conn, body.player_id):
         raise HTTPException(404, "unknown player")
+    ids = [a.question_id for a in body.attempts]
+    if len(set(ids)) < len(ids):
+        raise HTTPException(400, "a question appears twice in this round")
     try:
         attempts = [checked(a.model_dump()) for a in body.attempts]
     except ValueError as error:
