@@ -56,7 +56,7 @@ main {
 
 /* the menus sit in the middle of the screen; auto margins (not justify-content) so a tall
    screen still scrolls from the top instead of being cut off */
-#home, #options, #players, #my-stats, #leaderboard { margin-block: auto; }
+#home, #options, #welcome, #account, #my-stats, #leaderboard { margin-block: auto; }
 
 #question { font-size: clamp(16px, 4vw, 30px); text-align: center; line-height: 1.4; white-space: nowrap; }
 /* In a game the question and answer box sit so the box is in the middle of the screen, and the
@@ -133,11 +133,10 @@ label:has(input:focus) { color: var(--accent); outline: 2px solid var(--accent);
 input[type=checkbox], input[type=radio] { accent-color: var(--accent); }
 ::selection { background: var(--accent); color: var(--bg); }
 
-/* players and the screens that only list things */
+/* welcome, account and the screens that only list things */
 .screen > h2 { color: var(--accent); font-size: 16px; margin: 0; }
 #playing-as { color: var(--dim); margin: 0; }
-#player-list { width: 100%; display: flex; flex-direction: column; align-items: center; gap: 12px; }
-#new-name {
+#name-box {
   font: inherit;
   width: 16em;
   max-width: 100%;
@@ -147,7 +146,17 @@ input[type=checkbox], input[type=radio] { accent-color: var(--accent); }
   border: 3px solid var(--dim);
   outline: none;
 }
-#new-name:focus { border-color: var(--accent); }
+#name-box:focus { border-color: var(--accent); }
+.prompt { color: var(--dim); text-align: center; margin: 0; max-width: 30em; }
+/* the G mark on "Sign in with Google": a small white tile, drawn in CSS, no image or Google script */
+.google::before {
+  content: "G";
+  display: inline-block;
+  margin-right: 12px;
+  padding: 2px 6px;
+  background: #fff;
+  color: #4285f4;
+}
 #results .best { color: var(--accent); }
 
 @media (prefers-reduced-motion: reduce) {
