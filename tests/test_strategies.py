@@ -98,7 +98,7 @@ def test_mixed_levels_give_easy_and_hard_questions():
     percent = {q.strategy for q in questions if q.category == "percentage"}
     relationship = {q.strategy for q in questions if q.category == "relationship"}
     assert percent == {"percent_10", "percent_25", "percent_15"}
-    assert relationship == {"double_halve", "balance_sum"}
+    assert relationship == {"double_halve"}  # relationships are multiplicative only
 
 
 def test_unknown_category_is_rejected():

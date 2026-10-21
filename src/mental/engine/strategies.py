@@ -8,7 +8,7 @@ No question or step uses 0 or 1 as a number: those sums are pointless.
 
 
 def fmt(n):
-    """1234 -> '1,234'. Minus stays a plain "-": the pixel font has no "-" glyph."""
+    """1234 -> '1,234'. Minus stays a plain "-": the pixel font has no "−" glyph."""
     return f"{n:,}"
 
 
@@ -222,17 +222,6 @@ def double_halve(rng, difficulty):
     return f"{a} × {b} = {c} × ?", d, steps
 
 
-def balance_sum(rng, difficulty):
-    unit = 10 if difficulty == 2 else 100
-    # a stops at least 2 short of the next round number, so the move is never 1
-    a = rng.choice([n for n in range(unit + 1, unit * 10) if 0 < n % unit < unit - 1])
-    b = rng.randint(unit, unit * 10 - 1)
-    c = (a // unit + 1) * unit
-    move = c - a
-    steps = [f"{fmt(c)} - {a} = {move}", f"{b} - {move} = {b - move}"]
-    return f"{a} + {b} = {fmt(c)} + ?", b - move, steps
-
-
 STRATEGIES = {
     "basic_add": {"category": "addition", "difficulties": [1, 2, 3], "make": basic_add},
     "near_round_add": {"category": "addition", "difficulties": [2, 3], "make": near_round_add},
@@ -249,5 +238,4 @@ STRATEGIES = {
     "percent_25": {"category": "percentage", "difficulties": [2], "make": percent_25},
     "percent_15": {"category": "percentage", "difficulties": [3], "make": percent_15},
     "double_halve": {"category": "relationship", "difficulties": [1, 2, 3], "make": double_halve},
-    "balance_sum": {"category": "relationship", "difficulties": [2, 3], "make": balance_sum},
 }

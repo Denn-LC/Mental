@@ -68,7 +68,7 @@ function playFree() {
     $("menu-error").textContent = "Tick at least one topic.";
     return;
   }
-  state.category = ticked.length === 6 ? "mixed" : ticked.join(",");
+  state.category = ticked.length === document.querySelectorAll("input[name=topic]").length ? "mixed" : ticked.join(",");
   state.difficulty = document.querySelector("input[name=level]:checked").value;
   startGame();
 }
@@ -139,6 +139,7 @@ async function startRound() {
   setFeedback("");
   renderButtons();
   showAnswerBox(false);
+  $("retry").hidden = true;
   $("game").classList.add("counting");
   const fetching = fetchQuestions(QUESTIONS_PER_FETCH[state.mode]).catch((error) => error);
   for (const n of [3, 2, 1]) {
@@ -150,11 +151,7 @@ async function startRound() {
   if (session !== state.session) return;
   state.countingDown = false;
   $("game").classList.remove("counting");
-  if (questions instanceof Error) {
-    $("question").textContent = "";
-    setFeedback(`Could not load questions (${questions.message}). Enter to retry.`, "wrong");
-    return;
-  }
+  if (questions instanceof Error) return showLoadError(questions);
   state.queue = questions;
   showQuestion(state.queue.shift());
   if (state.mode === "test") {
@@ -179,12 +176,17 @@ async function nextQuestion() {
     state.loading = true;
     state.current = null;  // nothing on screen to answer or skip while loading
     state.solved = false;
+    $("question").textContent = "";
+    showSteps([]);
+    setFeedback("");
+    showAnswerBox(false);
+    $("retry").hidden = true;
     try {
       const questions = await fetchQuestions(QUESTIONS_PER_FETCH[state.mode]);
       if (session !== state.session) return;  // went back to the menu while loading
       state.queue = questions;
     } catch (error) {
-      if (session === state.session) setFeedback(`Could not load questions (${error.message}). Enter to retry.`, "wrong");
+      if (session === state.session) showLoadError(error);
       return;
     } finally {
       if (session === state.session) state.loading = false;
@@ -193,8 +195,16 @@ async function nextQuestion() {
   showQuestion(state.queue.shift());
 }
 
+// Shown when questions fail to load. The Retry button lets the mouse do what Enter does.
+function showLoadError(error) {
+  $("question").textContent = "";
+  setFeedback(`Could not load questions (${error.message}). Enter to retry.`, "wrong");
+  $("retry").hidden = false;
+}
+
 function showQuestion(q) {
   state.current = q;
+  $("retry").hidden = true;
   state.seen[q.id] = q;
   state.solved = false;
   state.attempt = {
@@ -240,6 +250,7 @@ function submit() {
     renderButtons();
     return;
   }
+  if (input.value === state.attempt.wrong_tries.at(-1)) return;  // same wrong value again
   state.attempt.wrong_tries.push(input.value);
   setFeedback(wrongLine(value, state.current.answer), "wrong");
   input.select();
@@ -295,7 +306,7 @@ function onInput() {
 function onEnter() {
   if (state.countingDown) return;
   if (state.mode === "test") {
-    if (state.testEndsAt) return recordWrongTry();
+    if (state.testEndsAt) return state.current ? recordWrongTry() : nextQuestion();  // no question: retry the load
     // between rounds: a late Enter from the last answer must not skip straight past the results
     if (performance.now() - state.endedAt > 1000) startRound();
     return;
@@ -307,7 +318,8 @@ function onEnter() {
 // Test mode gives no feedback on a wrong answer (that would be a hint), but keeps it for the stats.
 function recordWrongTry() {
   const value = parseAnswer(input.value);
-  if (state.current && value !== null && value !== state.current.answer) state.attempt.wrong_tries.push(input.value);
+  if (!state.current || value === null || value === state.current.answer) return;
+  if (input.value !== state.attempt.wrong_tries.at(-1)) state.attempt.wrong_tries.push(input.value);
 }
 
 // --- test mode -------------------------------------------------------------
@@ -327,6 +339,7 @@ function stopTest() {
 
 async function endTest() {
   stopTest();
+  state.session++;  // a question refill still in flight must not show up over the results
   const session = state.session;
   state.current = null;  // the unfinished question is not recorded
   state.endedAt = performance.now();
@@ -446,5 +459,6 @@ for (const item of document.querySelectorAll("[data-nav]")) {
 $("submit").addEventListener("click", () => { onEnter(); input.focus(); });
 $("give-up").addEventListener("click", () => { giveUp(); input.focus(); });
 $("skip").addEventListener("click", () => { skip(); input.focus(); });
+$("retry").addEventListener("click", onEnter);
 
 showHome();
