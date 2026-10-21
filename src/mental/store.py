@@ -3,49 +3,68 @@
 Every statement is a fixed string with ? placeholders, and the values are passed separately, so
 nothing a player types can change what a query does. Never build SQL with f-strings, %, .format or +.
 """
+import hashlib
 import json
 import os
+import secrets
 import sqlite3
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-# A round is one finished test or practice session. PRAGMA user_version is the schema version,
-# so a later version can see what it is upgrading from.
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS players (
-    id INTEGER PRIMARY KEY,
-    name TEXT NOT NULL UNIQUE COLLATE NOCASE,
-    created_at TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS rounds (
-    id INTEGER PRIMARY KEY,
-    player_id INTEGER NOT NULL REFERENCES players(id),
-    mode TEXT NOT NULL CHECK (mode IN ('practice', 'test')),
-    score INTEGER NOT NULL,
-    finished_at TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS attempts (
-    id INTEGER PRIMARY KEY,
-    round_id INTEGER NOT NULL REFERENCES rounds(id),
-    question_id TEXT NOT NULL,
-    seed INTEGER NOT NULL,
-    text TEXT NOT NULL,
-    category TEXT NOT NULL,
-    strategy TEXT NOT NULL,
-    difficulty INTEGER NOT NULL,
-    answer INTEGER NOT NULL,
-    given TEXT NOT NULL,
-    correct INTEGER NOT NULL,
-    skipped INTEGER NOT NULL,
-    gave_up INTEGER NOT NULL,
-    wrong_tries TEXT NOT NULL,  -- JSON list of strings
-    time_ms INTEGER NOT NULL
-);
-CREATE INDEX IF NOT EXISTS rounds_by_player ON rounds (player_id, mode);
-CREATE INDEX IF NOT EXISTS attempts_by_round ON attempts (round_id);
-PRAGMA user_version = 1;
-"""
-SCHEMA_VERSION = 1  # the user_version SCHEMA sets
+# Schema version 2. Statements run in order inside one transaction; the last sets the version.
+# A round is one finished test or practice session. Players come from Google sign-in and have no
+# display name until they choose one. Sessions store only a hash of their token.
+SCHEMA = [
+    """CREATE TABLE IF NOT EXISTS players (
+        id INTEGER PRIMARY KEY,
+        google_sub TEXT NOT NULL UNIQUE,
+        name TEXT UNIQUE COLLATE NOCASE,
+        created_at TEXT NOT NULL
+    )""",
+    """CREATE TABLE IF NOT EXISTS sessions (
+        token_hash TEXT PRIMARY KEY,
+        player_id INTEGER NOT NULL REFERENCES players(id),
+        expires_at TEXT NOT NULL
+    )""",
+    """CREATE TABLE IF NOT EXISTS oauth_states (
+        state TEXT PRIMARY KEY,
+        code_verifier TEXT NOT NULL,
+        expires_at TEXT NOT NULL
+    )""",
+    """CREATE TABLE IF NOT EXISTS rounds (
+        id INTEGER PRIMARY KEY,
+        player_id INTEGER NOT NULL REFERENCES players(id),
+        mode TEXT NOT NULL CHECK (mode IN ('practice', 'test')),
+        score INTEGER NOT NULL,
+        finished_at TEXT NOT NULL
+    )""",
+    """CREATE TABLE IF NOT EXISTS attempts (
+        id INTEGER PRIMARY KEY,
+        round_id INTEGER NOT NULL REFERENCES rounds(id),
+        question_id TEXT NOT NULL,
+        seed INTEGER NOT NULL,
+        text TEXT NOT NULL,
+        category TEXT NOT NULL,
+        strategy TEXT NOT NULL,
+        difficulty INTEGER NOT NULL,
+        answer INTEGER NOT NULL,
+        given TEXT NOT NULL,
+        correct INTEGER NOT NULL,
+        skipped INTEGER NOT NULL,
+        gave_up INTEGER NOT NULL,
+        wrong_tries TEXT NOT NULL,
+        time_ms INTEGER NOT NULL
+    )""",
+    "CREATE INDEX IF NOT EXISTS rounds_by_player ON rounds (player_id, mode)",
+    "CREATE INDEX IF NOT EXISTS attempts_by_round ON attempts (round_id)",
+    "CREATE INDEX IF NOT EXISTS sessions_by_player ON sessions (player_id)",
+    "PRAGMA user_version = 2",
+]
+SCHEMA_VERSION = 2  # the user_version SCHEMA sets
+# v1.2's name-only players are deleted on upgrade (after a backup), as the v1.3 spec says.
+DROP_V1 = ["DROP TABLE IF EXISTS attempts", "DROP TABLE IF EXISTS rounds", "DROP TABLE IF EXISTS players"]
+SESSION_DAYS = 30
+STATE_MINUTES = 10
 
 
 class NameTaken(Exception):
@@ -64,36 +83,113 @@ def connect(path=None):
     conn.row_factory = sqlite3.Row
     try:
         conn.execute("PRAGMA foreign_keys = ON")
-        version = conn.execute("PRAGMA user_version").fetchone()[0]
-        if version > SCHEMA_VERSION:
-            raise RuntimeError(f"{path} was made by a newer version of mental (schema {version})")
-        if version == 0:
-            conn.executescript(SCHEMA)
+        if conn.execute("PRAGMA user_version").fetchone()[0] != SCHEMA_VERSION:
+            upgrade(conn, path)
     except BaseException:
         conn.close()
         raise
     return conn
 
 
+def upgrade(conn, path):
+    """Bring the file to SCHEMA_VERSION. A version 1 file is backed up first, then cleared."""
+    if conn.execute("PRAGMA user_version").fetchone()[0] == 1:
+        backup = sqlite3.connect(path.with_name(path.name + ".v1-backup"))
+        try:
+            conn.backup(backup)
+        finally:
+            backup.close()
+    conn.execute("BEGIN IMMEDIATE")  # one connection upgrades at a time
+    try:
+        version = conn.execute("PRAGMA user_version").fetchone()[0]  # another may have done it meanwhile
+        if version > SCHEMA_VERSION:
+            raise RuntimeError(f"{path} was made by a newer version of mental (schema {version})")
+        if version == 1:
+            for statement in DROP_V1:
+                conn.execute(statement)
+        if version < SCHEMA_VERSION:
+            for statement in SCHEMA:
+                conn.execute(statement)
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+
+
 def now():
     return datetime.now(UTC).isoformat(timespec="seconds")
 
 
-def add_player(conn, name):
+def later(**delta):
+    return (datetime.now(UTC) + timedelta(**delta)).isoformat(timespec="seconds")
+
+
+def token_hash(token):
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+def player_for_google(conn, sub):
+    """The player for this Google account, made on its first sign-in (with no display name yet)."""
+    with conn:
+        conn.execute("INSERT OR IGNORE INTO players (google_sub, created_at) VALUES (?, ?)", (sub, now()))
+    return dict(conn.execute("SELECT id, name FROM players WHERE google_sub = ?", (sub,)).fetchone())
+
+
+def set_name(conn, player_id, name):
     try:
         with conn:
-            cursor = conn.execute("INSERT INTO players (name, created_at) VALUES (?, ?)", (name, now()))
+            conn.execute("UPDATE players SET name = ? WHERE id = ?", (name, player_id))
     except sqlite3.IntegrityError:
         raise NameTaken(name) from None
-    return {"id": cursor.lastrowid, "name": name}
 
 
-def players(conn):
-    return [dict(row) for row in conn.execute("SELECT id, name FROM players ORDER BY name COLLATE NOCASE")]
+def create_session(conn, player_id):
+    """A new random session token for the player. Only its hash is stored."""
+    token = secrets.token_urlsafe(32)
+    with conn:
+        conn.execute("DELETE FROM sessions WHERE expires_at < ?", (now(),))
+        conn.execute(
+            "INSERT INTO sessions (token_hash, player_id, expires_at) VALUES (?, ?, ?)",
+            (token_hash(token), player_id, later(days=SESSION_DAYS)),
+        )
+    return token
 
 
-def player_exists(conn, player_id):
-    return conn.execute("SELECT 1 FROM players WHERE id = ?", (player_id,)).fetchone() is not None
+def session_player(conn, token):
+    """The player ({id, name}) a session token belongs to, or None if it's unknown or expired."""
+    if not token:
+        return None
+    row = conn.execute(
+        """SELECT p.id, p.name FROM sessions s JOIN players p ON p.id = s.player_id
+           WHERE s.token_hash = ? AND s.expires_at > ?""",
+        (token_hash(token), now()),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def end_session(conn, token):
+    with conn:
+        conn.execute("DELETE FROM sessions WHERE token_hash = ?", (token_hash(token),))
+
+
+def save_oauth_state(conn, state, code_verifier):
+    with conn:
+        conn.execute("DELETE FROM oauth_states WHERE expires_at < ?", (now(),))
+        conn.execute(
+            "INSERT INTO oauth_states (state, code_verifier, expires_at) VALUES (?, ?, ?)",
+            (state, code_verifier, later(minutes=STATE_MINUTES)),
+        )
+
+
+def take_oauth_state(conn, state):
+    """The code_verifier saved for this state, or None. A state works once: it is deleted here."""
+    with conn:
+        row = conn.execute(
+            "DELETE FROM oauth_states WHERE state = ? RETURNING code_verifier, expires_at", (state,)
+        ).fetchone()
+    if row is None or row["expires_at"] <= now():
+        return None
+    return row["code_verifier"]
 
 
 def save_round(conn, player_id, mode, attempts):
@@ -152,9 +248,9 @@ def player_attempts(conn, player_id):
 
 
 def leaderboard(conn):
-    """Top 10 players by best test score (ties alphabetical). Players with no test are left out."""
+    """Top 10 named players by best test score (ties alphabetical). Players with no test are left out."""
     rows = conn.execute(
         """SELECT p.id, p.name, MAX(r.score) AS best FROM rounds r JOIN players p ON p.id = r.player_id
-           WHERE r.mode = 'test' GROUP BY p.id ORDER BY best DESC, p.name COLLATE NOCASE LIMIT 10"""
+           WHERE r.mode = 'test' AND p.name IS NOT NULL GROUP BY p.id ORDER BY best DESC, p.name COLLATE NOCASE LIMIT 10"""
     )
     return [dict(row) for row in rows]
