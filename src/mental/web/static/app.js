@@ -1,9 +1,9 @@
 // mental: the browser side. Shows questions, checks answers, times every attempt.
 // Questions arrive from /api/questions already carrying their answer and worked steps.
-// A finished round goes to /api/rounds, which re-checks it, saves it under the player and sends
-// back its summary.
+// A finished round goes to /api/rounds, which re-checks it, saves it when someone is signed in
+// (the server knows who from the session cookie) and sends back its summary.
 //
-// Anything a person typed (a player's name) goes on the page with textContent, never innerHTML.
+// Anything a person typed (a display name) goes on the page with textContent, never innerHTML.
 
 const TEST_SECONDS = 120;
 const COUNTDOWN_MS = 700;  // per number of the 3-2-1 countdown
@@ -12,7 +12,6 @@ const KEYS = {
   practice: "Enter submit / next · Tab give up · Esc quit",
   test: "type the answer · Tab skip · Esc menu",
 };
-const PLAYER_KEY = "mental.player";  // localStorage: id of the last player on this browser
 // the server's rule too: 1-16 letters, digits, spaces, _ . - and no space at either end
 const NAME_RULE = /^[A-Za-z0-9_.-]([A-Za-z0-9 _.-]{0,14}[A-Za-z0-9_.-])?$/;
 
@@ -20,7 +19,7 @@ const $ = (id) => document.getElementById(id);
 const input = $("answer");
 
 const state = {
-  player: null,       // {id, name}
+  me: null,           // {signed_in, name, google} from /api/me
   mode: "practice",   // "practice" | "test"
   category: "mixed",  // for /api/questions: "mixed" or a comma-separated list
   difficulty: "1",    // "1", "2", "3" or "mixed" (each question gets a random level)
@@ -39,104 +38,132 @@ const state = {
   unsaved: null,      // a finished round whose save failed: Enter or Retry tries again
   saving: null,       // {session, keepalive} while a round save is in flight
   screenLoad: 0,      // goes up each time a menu screen starts loading; stale loads check it
-  addingPlayer: false,
+  savingName: false,
   testEndsAt: 0,      // 0 = no test running
   endedAt: -Infinity, // when the last round ended
   timer: null,
 };
 
-// --- players -------------------------------------------------------------------
+// --- signing in ------------------------------------------------------------------
 
 async function getJSON(url) {
   const response = await fetch(url, { signal: AbortSignal.timeout(10000) });  // a hung server ends in an error
-  if (!response.ok) throw new Error(`server said ${response.status}`);
+  if (!response.ok) throw Object.assign(new Error(`server said ${response.status}`), { status: response.status });
   return response.json();
 }
 
-// On load: straight home as the last player if they still exist; otherwise ask who's playing.
+const SIGNIN_MESSAGES = {
+  cancelled: "Sign-in cancelled.",
+  failed: "Sign-in failed, please try again.",
+  unavailable: "Sign-in isn't set up here.",
+};
+
+// On load: signed in -> home (or the display-name screen the first time); otherwise Welcome.
 async function start() {
-  let remembered = null;
+  const outcome = new URLSearchParams(location.search).get("signin");
+  if (outcome) history.replaceState(null, "", "/");  // a reload must not show the message again
+  $("welcome-retry").hidden = true;
   try {
-    remembered = Number(localStorage.getItem(PLAYER_KEY));
-  } catch {}  // storage can be blocked: then we just ask
-  try {
-    const player = (await getJSON("/api/players")).find((p) => p.id === remembered);
-    if (player) return pickPlayer(player);
-  } catch {}  // showPlayers says what went wrong
-  showPlayers();
-}
-
-async function showPlayers() {
-  document.activeElement?.blur();
-  showScreen("players");
-  $("player-error").textContent = "";
-  $("new-name").value = "";
-  $("player-list").replaceChildren();
-  const load = ++state.screenLoad;
-  let players;
-  try {
-    players = await getJSON("/api/players");
+    state.me = await getJSON("/api/me");
   } catch (error) {
-    if (load !== state.screenLoad || $("players").hidden) return;  // left or reloaded the screen meanwhile
-    $("player-error").textContent = `Could not reach the server (${error.message}).`;
-    $("player-list").replaceChildren(menuButton("Retry", showPlayers));
-    $("player-list").firstChild.focus();
-    return;
+    state.me = { signed_in: false, name: null, google: false, unreachable: true };  // claim neither sign-in line
+    renderMe();
+    $("welcome-retry").hidden = false;
+    return showWelcome(`Could not reach the server (${error.message}).`);
   }
-  if (load !== state.screenLoad || $("players").hidden) return;  // left or reloaded the screen meanwhile
-  $("player-list").replaceChildren(...players.map((p) => menuButton(p.name, () => pickPlayer(p))));
-  if (!$("players").contains(document.activeElement)) {  // don't steal focus from someone typing
-    const current = players.findIndex((p) => p.id === state.player?.id);
-    ($("player-list").children[Math.max(current, 0)] || $("new-name")).focus();
-  }
-}
-
-// A big menu button made from code; its label is text, never HTML (it can be a player's name).
-function menuButton(label, onClick) {
-  const button = document.createElement("button");
-  button.className = "choice";
-  button.dataset.nav = "";
-  button.textContent = label;
-  button.addEventListener("click", onClick);
-  followMouse(button);
-  return button;
-}
-
-function pickPlayer(player) {
-  state.player = player;
-  try {
-    localStorage.setItem(PLAYER_KEY, String(player.id));
-  } catch {}
+  renderMe();
+  if (!state.me.signed_in) return showWelcome(SIGNIN_MESSAGES[outcome] || "");
+  if (state.me.name === null) return showAccount();
   showHome();
 }
 
-async function addPlayer() {
-  const name = $("new-name").value.trim();
-  if (!NAME_RULE.test(name)) {
-    $("player-error").textContent = "A name is 1-16 letters, digits, spaces, _ . or -";
+// Shows or hides everything that depends on who is playing (see the data-* attributes in index.html).
+function renderMe() {
+  const { signed_in: member, google, unreachable } = state.me;
+  const shown = {
+    "data-member-only": member,
+    "data-signin": !member && google && !unreachable,
+    "data-signin-off": !member && !google && !unreachable,
+  };
+  for (const [attribute, visible] of Object.entries(shown)) {
+    for (const element of document.querySelectorAll(`[${attribute}]`)) element.hidden = !visible;
+  }
+  $("playing-as").textContent = member ? `playing as ${state.me.name}` : "playing as guest · nothing is saved";
+}
+
+function focusFirst(screenId) {
+  document.querySelector(`#${screenId} [data-nav]:not([hidden])`)?.focus();
+}
+
+function showWelcome(message = "") {
+  document.activeElement?.blur();
+  showScreen("welcome");
+  $("signin-message").textContent = message;
+  focusFirst("welcome");
+}
+
+function signIn() {
+  location.assign("/auth/google");  // Google's account chooser, then back to /auth/callback
+}
+
+async function signOut() {
+  try {
+    const response = await fetch("/auth/signout", { method: "POST" });
+    if (!response.ok) throw new Error(`server said ${response.status}`);
+  } catch (error) {  // the session may still be live, so stay where you are rather than pretend
+    $("name-error").textContent = `Could not sign out (${error.message}).`;
     return;
   }
-  if (state.addingPlayer) return;  // a second Enter while the first is on its way
-  state.addingPlayer = true;
+  state.me = { ...state.me, signed_in: false, name: null };
+  renderMe();
+  showWelcome();
+}
+
+// Account screen; the first time after signing in it asks for a display name instead.
+function showAccount() {
+  const first = state.me.name === null;
+  showScreen("account");
+  $("account-title").textContent = first ? "pick a display name" : "account";
+  $("account-back").hidden = first;
+  $("name-error").textContent = "";
+  $("name-box").value = state.me.name || "";
+  $("name-box").focus();
+}
+
+async function saveName() {
+  const name = $("name-box").value.trim();
+  if (!NAME_RULE.test(name)) {
+    $("name-error").textContent = "A name is 1-16 letters, digits, spaces, _ . or -";
+    return;
+  }
+  if (state.savingName) return;  // a second Enter while the first is on its way
+  state.savingName = true;
   let response;
   try {
-    response = await fetch("/api/players", {
-      method: "POST",
+    response = await fetch("/api/me/name", {
+      method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name }),
     });
   } catch (error) {
-    $("player-error").textContent = `Could not reach the server (${error.message}).`;
+    $("name-error").textContent = `Could not reach the server (${error.message}).`;
     return;
   } finally {
-    state.addingPlayer = false;
+    state.savingName = false;
   }
   if (response.status === 409) {
-    $("player-error").textContent = "That name is taken.";
+    $("name-error").textContent = "That name is taken.";
+  } else if (response.status === 401) {
+    state.me = { ...state.me, signed_in: false, name: null };
+    renderMe();
+    showWelcome("You were signed out. Please sign in again.");
   } else if (!response.ok) {
-    $("player-error").textContent = `Could not add the player (server said ${response.status}).`;
+    $("name-error").textContent = `Could not save the name (server said ${response.status}).`;
   } else {
-    pickPlayer(await response.json());
+    const first = state.me.name === null;
+    state.me.name = name;
+    renderMe();
+    showHome(first ? undefined : "account-choice");
   }
 }
 
@@ -157,7 +184,7 @@ function showHome(focusId) {
   state.unsaved = null;
   state.current = null;
   showScreen("home");
-  $("playing-as").textContent = `playing as ${state.player.name}`;
+  renderMe();
   ($(focusId) || document.querySelector(`#home [data-mode=${state.mode}]`)).focus();
 }
 
@@ -189,18 +216,20 @@ function playPractice() {
 // Arrow keys move the highlight the way they point; Enter or Space picks the item.
 function onMenuKey(event) {
   const direction = { ArrowUp: [0, -1], ArrowDown: [0, 1], ArrowLeft: [-1, 0], ArrowRight: [1, 0] }[event.key];
-  const typing = document.activeElement === $("new-name");
+  const typing = document.activeElement === $("name-box");
   if (direction && !(typing && direction[0])) {  // left/right inside the name box move the caret
     nearestItem(document.activeElement, direction)?.focus();
   } else if (event.key === "Enter" && typing) {
-    addPlayer();
+    saveName();
   } else if (event.key === "Enter" && document.activeElement.tagName === "INPUT") {
     document.activeElement.click();  // tick a box or pick a level (buttons click on Enter by themselves)
-  } else if (!$("players").hidden && !typing && event.key.length === 1 && event.key !== " ") {
-    $("new-name").focus();  // typing a name lands in the name box wherever the highlight is
+  } else if (!$("account").hidden && !typing && event.key.length === 1 && event.key !== " ") {
+    $("name-box").focus();  // typing a name lands in the name box wherever the highlight is
     return;
-  } else if (event.key === "Escape" && $("home").hidden && state.player) {
-    // every menu screen goes back home (the player screen only once someone is playing)
+  } else if (event.key === "Escape" && !$("account").hidden && state.me.name === null) {
+    signOut();  // leaving the first display-name screen signs back out
+  } else if (event.key === "Escape" && $("home").hidden && $("welcome").hidden && state.me) {
+    // every other menu screen goes back home, highlighting the choice it was opened from
     showHome(`${document.querySelector(".screen:not([hidden])").id}-choice`);
   } else {
     return;
@@ -211,9 +240,10 @@ function onMenuKey(event) {
 // The menu item nearest to `from` in direction [dx, dy]. An item counts only if it lies more in
 // that direction than off to the side. Null at the edge, so the highlight stays put.
 function nearestItem(from, [dx, dy]) {
-  const items = [...document.querySelectorAll(".screen:not([hidden]) [data-nav]")];
-  if (!items.includes(from)) return items[0];
   const box = (el) => (el.closest("label") || el).getBoundingClientRect();  // a tickbox's label is what you see
+  const shown = (el) => !el.hidden && (box(el).width > 0 || box(el).height > 0);  // hidden items can't be chosen
+  const items = [...document.querySelectorAll(".screen:not([hidden]) [data-nav]")].filter(shown);
+  if (!items.includes(from)) return items[0];
   const gap = (v, low, high) => Math.max(low - v, 0, v - high);  // 0 when v is within [low, high]
   const here = box(from);
   const x = here.left + here.width / 2;
@@ -498,7 +528,7 @@ async function saveRound() {
   const session = state.session;
   if (state.saving?.session === session) return;  // this round is already on its way
   const attempts = state.unsaved;
-  const body = JSON.stringify({ player_id: state.player.id, mode: state.mode, attempts });
+  const body = JSON.stringify({ mode: state.mode, attempts });
   const keepalive = body.length < KEEPALIVE_LIMIT;
   state.saving = { session, keepalive };
   $("retry").hidden = true;
@@ -526,7 +556,14 @@ async function saveRound() {
   if (state.unsaved === attempts) state.unsaved = null;
   if (session !== state.session) return;  // moved on while it saved
   setFeedback("");
-  showResults(saved.summary, saved.best);
+  if (!saved.saved && state.me.signed_in) {  // the session ended meanwhile: find out, so the page says so
+    try {
+      state.me = await getJSON("/api/me");
+      renderMe();
+    } catch {}
+    if (session !== state.session) return;
+  }
+  showResults(saved.summary, saved.best, saved.saved);
 }
 
 // Closing or reloading the tab mid-practice still saves the questions already finished.
@@ -535,11 +572,11 @@ async function saveRound() {
 const BEACON_CHUNK = 100;
 
 addEventListener("pagehide", () => {
-  if (state.mode !== "practice" || !state.player) return;
+  if (state.mode !== "practice" || !state.me?.signed_in || !state.me.name) return;  // guests have nothing to save
   // a finished round whose save is already on its way with keepalive arrives by itself
   const attempts = !state.finished ? state.attempts : state.saving?.keepalive ? [] : state.unsaved || [];
   for (let i = 0; i < attempts.length; i += BEACON_CHUNK) {
-    const body = JSON.stringify({ player_id: state.player.id, mode: "practice", attempts: attempts.slice(i, i + BEACON_CHUNK) });
+    const body = JSON.stringify({ mode: "practice", attempts: attempts.slice(i, i + BEACON_CHUNK) });
     if (!navigator.sendBeacon("/api/rounds", new Blob([body], { type: "application/json" }))) break;
   }
   state.attempts = [];
@@ -551,7 +588,7 @@ const seconds = (ms) => `${(ms / 1000).toFixed(1)}s`;
 const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
 // Only numbers and the server's own question text, steps and topic names go into this HTML.
-function showResults(summary, best) {
+function showResults(summary, best, saved) {
   state.endedAt = performance.now();  // the 1-second Enter guard counts from when the results appear
   const o = summary.overall;
   const rows = Object.entries(summary.by_category)
@@ -563,12 +600,13 @@ function showResults(summary, best) {
     .join("");
   const top = state.mode === "test"
     ? `<h2>score ${o.score}</h2>
-       <p class="best">${bestLine(o.score, best)}</p>
+       ${best ? `<p class="best">${bestLine(o.score, best)}</p>` : ""}
        <p>accuracy ${percent(o.accuracy)} · avg ${seconds(o.avg_time_ms)} · skipped ${o.skipped}</p>`
     : `<h2>practice done</h2>
        <p>${plural(o.count, "question")} · ${o.score} solved · first try ${percent(o.accuracy)} · gave up ${o.gave_up} · avg ${seconds(o.avg_time_ms)}</p>`;
   $("results").innerHTML = `
     ${top}
+    ${saved ? "" : `<p class="best">not saved · sign in to keep your scores</p>`}
     <table><tr><th>category</th><th>solved</th><th>first try</th><th>avg</th></tr>${rows}</table>
     <h3>slowest: learn these</h3><ol>${slowest}</ol>
     <p>Enter to go again · Esc for the menu</p>`;
@@ -586,14 +624,20 @@ function bestLine(score, best) {
 
 async function showMyStats() {
   showScreen("my-stats");
-  document.querySelector("#my-stats [data-back]").focus();
+  focusFirst("my-stats");
+  if (!state.me.signed_in) return;  // guests see the sign-in prompt instead
   $("my-stats-body").textContent = "loading...";
   const load = ++state.screenLoad;
   let stats;
   try {
-    stats = await getJSON(`/api/players/${state.player.id}/stats`);
+    stats = await getJSON("/api/me/stats");
   } catch (error) {
     if (load !== state.screenLoad) return;
+    if (error.status === 401) {  // the session ended (expired, or signed out elsewhere)
+      state.me = { ...state.me, signed_in: false, name: null };
+      renderMe();
+      return focusFirst("my-stats");
+    }
     $("my-stats-body").textContent = `Could not load your stats (${error.message}).`;
     return;
   }
@@ -616,7 +660,7 @@ async function showMyStats() {
 
 async function showLeaderboard() {
   showScreen("leaderboard");
-  document.querySelector("#leaderboard [data-back]").focus();
+  focusFirst("leaderboard");
   const list = $("leaderboard-list");
   list.replaceChildren(listItem("loading...", "note"));
   const load = ++state.screenLoad;
@@ -631,7 +675,7 @@ async function showLeaderboard() {
   if (load !== state.screenLoad || $("leaderboard").hidden) return;  // left or reloaded the screen meanwhile
   if (rows.length === 0) return list.replaceChildren(listItem("no tests yet", "note"));
   // names are typed by people: listItem puts them in as text
-  list.replaceChildren(...rows.map((r) => r.id === state.player.id ? listItem(`${r.name} · ${r.best} (you)`, "me") : listItem(`${r.name} · ${r.best}`, "")));
+  list.replaceChildren(...rows.map((r) => r.me ? listItem(`${r.name} · ${r.best} (you)`, "me") : listItem(`${r.name} · ${r.best}`, "")));
 }
 
 function listItem(text, className) {
@@ -717,8 +761,12 @@ for (const choice of document.querySelectorAll("[data-mode]")) {
 }
 for (const item of document.querySelectorAll("[data-nav]")) followMouse(item);
 $("play").addEventListener("click", playPractice);
-$("add-player").addEventListener("click", addPlayer);
-$("players-choice").addEventListener("click", () => showPlayers());
+for (const button of document.querySelectorAll("button[data-signin]")) button.addEventListener("click", signIn);
+$("guest-choice").addEventListener("click", () => showHome());
+$("welcome-retry").addEventListener("click", start);
+$("account-choice").addEventListener("click", showAccount);
+$("save-name").addEventListener("click", saveName);
+$("sign-out").addEventListener("click", signOut);
 $("my-stats-choice").addEventListener("click", showMyStats);
 $("leaderboard-choice").addEventListener("click", showLeaderboard);
 for (const back of document.querySelectorAll("[data-back]")) {

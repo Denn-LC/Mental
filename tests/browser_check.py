@@ -1,9 +1,12 @@
 """Drive the page in a headless browser and check the keyboard flows, saving and race fixes.
 
-Not part of `pytest` (it needs a running server and a browser). Give the server a database of its
-own, so the check never writes players into your real one:
+Not part of `pytest` (it needs a running server and a browser). The server gets a database of its
+own and made-up Google settings (the check never talks to Google), and the check gets the same
+database so it can sign in by making a session in it:
 
-    MENTAL_DB=$(mktemp -d)/check.db uv run uvicorn mental.web.app:app --port 8765   # one terminal
+    export MENTAL_DB=$(mktemp -d)/check.db MENTAL_BASE_URL=http://127.0.0.1:8765
+    MENTAL_GOOGLE_CLIENT_ID=check-client MENTAL_GOOGLE_CLIENT_SECRET=check-secret \\
+        uv run uvicorn mental.web.app:app --port 8765 &
     uv run --with playwright python tests/browser_check.py http://127.0.0.1:8765/
 
 Set CHROMIUM=/path/to/chrome to use a browser Playwright didn't install itself.
@@ -12,12 +15,29 @@ import json
 import os
 import random
 import sys
+from urllib.parse import parse_qs, urlparse
 
 from playwright.sync_api import sync_playwright
+
+from mental import store
 
 URL = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8765/"
 EXE = os.environ.get("CHROMIUM")
 NAME = f"check{random.randint(1000, 9999)}"  # a new player every run
+if not os.environ.get("MENTAL_DB"):
+    sys.exit("set MENTAL_DB to the server's database first (see the docstring)")
+
+
+def sign_in(page, sub, name=None):
+    """Sign in as a Google account without Google: make its session in the server's database."""
+    conn = store.connect()
+    player = store.player_for_google(conn, sub)
+    if name:
+        store.set_name(conn, player["id"], name)
+    token = store.create_session(conn, player["id"])
+    conn.close()
+    page.context.add_cookies([{"name": "mental_session", "value": token, "url": URL}])
+
 results, errors = [], []
 
 
@@ -69,13 +89,13 @@ FAKE_SESSION = """async (n) => {
     category: q.category, strategy: q.strategy, difficulty: q.difficulty, answer: q.answer,
     given: String(q.answer), correct: true, skipped: false, wrong_tries: [], gave_up: false,
     time_ms: 1000, mode: 'practice' }));
-  return JSON.stringify({ player_id: state.player.id, mode: 'practice', attempts: state.attempts }).length;
+  return JSON.stringify({ mode: 'practice', attempts: state.attempts }).length;
 }"""
 
 
 def saved_count(page):
-    """How many attempts the server has saved for the current player."""
-    return page.evaluate("""fetch(`/api/players/${state.player.id}/stats`).then((r) => r.json())
+    """How many attempts the server has saved for the signed-in account."""
+    return page.evaluate("""fetch('/api/me/stats').then((r) => r.json())
         .then((s) => Object.values(s.by_category).reduce((n, c) => n + c.count, 0))""")
 
 
@@ -83,6 +103,7 @@ with sync_playwright() as p:
     browser = p.chromium.launch(executable_path=EXE) if EXE else p.chromium.launch()
     page = browser.new_page(viewport={"width": 900, "height": 900})
     page.on("pageerror", lambda e: errors.append(str(e)))
+    page.route("https://accounts.google.com/**", lambda route: route.abort())  # a guard: no run can reach Google
     page.goto(URL)
     answer = lambda: page.evaluate("state.current.answer")
     playing = lambda: page.wait_for_function("state.current && !state.countingDown", timeout=10000)
@@ -90,40 +111,112 @@ with sync_playwright() as p:
     focused = lambda: page.evaluate("(({ dataset, id, value, textContent }) => dataset.mode || id || value || textContent)(document.activeElement)")
     home = lambda: page.wait_for_selector("#home:not([hidden])")
 
-    # players
-    page.wait_for_selector("#players:not([hidden])")
-    check("a new browser is asked who's playing", visible(page, "players") and not visible(page, "home"))
-    page.focus("#new-name")
+    # welcome and guest play
+    page.wait_for_selector("#welcome:not([hidden])")
+    check("a new visitor gets Welcome: sign in with Google or play as guest",
+          visible(page, "welcome-signin") and visible(page, "guest-choice") and focused() == "welcome-signin")
+    check("Welcome says guest games aren't saved, where it can be seen",
+          page.get_by_text("aren't saved").first.is_visible())
+    page.click("#guest-choice")
+    home()
+    check("Play as guest goes home as a guest, with Sign in and no Account",
+          page.text_content("#playing-as") == "playing as guest · nothing is saved"
+          and visible(page, "home-signin") and not visible(page, "account-choice"))
+    page.click("[data-mode=practice]")
+    page.click("#play")
+    playing()
+    page.keyboard.press("Tab")
+    page.click("#quit")
+    page.wait_for_selector("#results:not([hidden])")
+    check("a guest's practice summary says it isn't saved", "not saved · sign in" in page.text_content("#results"))
+    page.keyboard.press("Escape")
+    page.click("[data-mode=test]")
+    running()
+    page.evaluate("state.testEndsAt = performance.now()")
+    page.wait_for_selector("#results:not([hidden])")
+    check("a guest's test results have no best line",
+          "score" in page.text_content("#results") and "best" not in page.text_content("#results")
+          and "not saved · sign in" in page.text_content("#results"))
+    page.keyboard.press("Escape")
+    page.click("#my-stats-choice")
+    check("a guest's My stats asks them to sign in",
+          visible(page, "stats-signin") and not visible(page, "my-stats-body") and focused() == "stats-signin")
+    page.keyboard.press("Escape")
+    page.click("#leaderboard-choice")
+    check("a guest sees the leaderboard with a sign-in prompt", visible(page, "board-signin") and visible(page, "leaderboard-list"))
+    page.keyboard.press("Escape")
+
+    # signing in
+    # Chromium here doesn't route redirected requests, so the check stops at the app's own redirect:
+    # it reads where /auth/google points and answers with a stub page, so Google is never contacted.
+    sent_to = []
+
+    def stub_google(route):
+        reply = route.fetch(max_redirects=0)
+        sent_to.append(reply.headers.get("location", ""))
+        route.fulfill(body="Google's account chooser")
+
+    page.route("**/auth/google", stub_google)
+    page.click("#home-signin")
+    page.wait_for_function("document.body.textContent.includes(\"Google's account chooser\")")
+    page.unroute("**/auth/google")
+    check("Sign in with Google redirects to Google's own address", sent_to[0].startswith("https://accounts.google.com/"))
+    query = {key: values[0] for key, values in parse_qs(urlparse(sent_to[0]).query).items()}
+    check("...with this app's client, PKCE and only the openid scope",
+          query.get("client_id") == "check-client" and query.get("scope") == "openid"
+          and query.get("code_challenge_method") == "S256" and query.get("redirect_uri") == URL.rstrip("/") + "/auth/callback")
+    page.goto(URL + "?signin=cancelled")
+    page.wait_for_selector("#welcome:not([hidden])")
+    check("coming back cancelled says so on Welcome, and the address is cleaned up",
+          page.text_content("#signin-message") == "Sign-in cancelled." and page.url == URL)
+    sign_in(page, f"google-{NAME}")
+    page.goto(URL)
+    page.wait_for_selector("#account:not([hidden])")
+    check("a first sign-in asks for a display name, with no Back",
+          page.text_content("#account-title") == "pick a display name" and not visible(page, "account-back")
+          and focused() == "name-box")
+    page.keyboard.press("Escape")
+    page.wait_for_selector("#welcome:not([hidden])")
+    check("Esc on the first name screen signs out", page.evaluate("fetch('/api/me').then((r) => r.json()).then((m) => !m.signed_in)"))
+    sign_in(page, f"google-{NAME}")
+    page.goto(URL)
+    page.wait_for_selector("#account:not([hidden])")
     page.keyboard.type("no <tags>")
     page.keyboard.press("Enter")
-    check("a bad name gets a message and stays", "1-16 letters" in page.text_content("#player-error") and visible(page, "players"))
-    page.fill("#new-name", "")
+    check("a bad name gets a message and stays", "1-16 letters" in page.text_content("#name-error") and visible(page, "account"))
+    page.fill("#name-box", "")
     page.keyboard.type(NAME)
     page.keyboard.press("ArrowLeft")
-    check("left/right in the name box move the caret, not the highlight", focused() == "new-name")
+    check("left/right in the name box move the caret, not the highlight", focused() == "name-box")
     page.keyboard.press("Enter")
     home()
-    check("a new name goes home playing as it, Practice highlighted",
-          page.text_content("#playing-as") == f"playing as {NAME}" and focused() == "practice")
-    page.click("#players-choice")
-    page.wait_for_function("$('player-list').children.length > 0")
-    check("Switch player lists the players, the current one highlighted", focused() == NAME)
-    page.keyboard.type("zz")
-    check("typing on the player screen goes into the name box", focused() == "new-name" and page.input_value("#new-name") == "zz")
-    page.fill("#new-name", NAME.upper())
-    page.press("#new-name", "Enter")
-    page.wait_for_function("$('player-error').textContent !== ''")
-    check("a taken name (in any case) gets a message", "taken" in page.text_content("#player-error"))
+    check("a display name goes home playing as it, Practice highlighted, Account instead of Sign in",
+          page.text_content("#playing-as") == f"playing as {NAME}" and focused() == "practice"
+          and visible(page, "account-choice") and not visible(page, "home-signin"))
+    taken = f"taken{NAME[5:]}"
+    other = store.connect()
+    store.set_name(other, store.player_for_google(other, f"google-other-{NAME}")["id"], taken)  # someone else holds this name
+    other.close()
+    page.click("#account-choice")
+    check("Account shows your name in the box, with Back and Sign out",
+          page.input_value("#name-box") == NAME and visible(page, "account-back") and visible(page, "sign-out"))
+    page.fill("#name-box", taken.upper())
+    page.press("#name-box", "Enter")
+    page.wait_for_function("$('name-error').textContent !== ''")
+    check("a taken name (in any case) gets a message", "taken" in page.text_content("#name-error"))
+    renamed = f"{NAME}b"
+    page.fill("#name-box", renamed)
+    page.press("#name-box", "Enter")
+    home()
+    check("a successful rename goes home, Account highlighted, showing the new name",
+          page.text_content("#playing-as") == f"playing as {renamed}" and focused() == "account-choice")
+    page.click("#account-choice")
+    page.fill("#name-box", NAME)
+    page.press("#name-box", "Enter")
+    home()
+    page.click("#account-choice")
     page.keyboard.press("Escape")
-    check("Esc on the player screen goes home, Switch player highlighted", visible(page, "home") and focused() == "players-choice")
-    page.route("**/api/players", lambda route: route.fulfill(json=[{"id": 1, "name": "<img src=x onerror=window.pwned=1>"}]))
-    page.click("#players-choice")
-    page.wait_for_function("$('player-list').children.length > 0")
-    check("a name is shown as text, never run as HTML",
-          page.text_content("#player-list button") == "<img src=x onerror=window.pwned=1>"
-          and page.evaluate("!document.querySelector('#player-list img') && window.pwned === undefined"))
-    page.unroute("**/api/players")
-    page.keyboard.press("Escape")
+    check("Esc on Account goes home, Account highlighted", visible(page, "home") and focused() == "account-choice")
     page.focus("[data-mode=practice]")
 
     # home screen
@@ -292,7 +385,7 @@ with sync_playwright() as p:
     home()
     page.wait_for_timeout(300)
     check("reloading mid-practice still saves what was finished", saved_count(page) == before + 2)
-    check("a reload remembers the player", page.text_content("#playing-as") == f"playing as {NAME}")
+    check("a reload keeps you signed in", page.text_content("#playing-as") == f"playing as {NAME}")
     page.keyboard.press("Enter")
     page.keyboard.press("Enter")
     playing()
@@ -314,12 +407,15 @@ with sync_playwright() as p:
     after = saved_count(page)
     check(f"closing the tab on a long session still saves its first pieces ({after - before} of 400)",
           after - before >= 100 and (after - before) % 100 == 0)
-    page.evaluate("localStorage.setItem('mental.player', '987654321')")
+    page.context.add_cookies([{"name": "mental_session", "value": "made-up", "url": URL}])
+
     page.reload()
-    page.wait_for_selector("#players:not([hidden])")
-    check("a remembered player that no longer exists gets asked again", visible(page, "players"))
-    page.click(f"#player-list button:text-is('{NAME}')")
-    check("picking a player from the list goes home as them", page.text_content("#playing-as") == f"playing as {NAME}")
+    page.wait_for_selector("#welcome:not([hidden])")
+    check("an unknown session cookie shows Welcome", visible(page, "welcome"))
+    sign_in(page, f"google-{NAME}")
+    page.goto(URL)
+    home()
+    check("signing in again lands home as the same player", page.text_content("#playing-as") == f"playing as {NAME}")
 
     # test mode
     page.keyboard.press("ArrowDown")
@@ -433,16 +529,16 @@ with sync_playwright() as p:
     page.wait_for_selector("#results:not([hidden])")
     check("Enter after a failed save saves it and shows the results",
           "score" in page.text_content("#results") and not visible(page, "retry") and saved_count(page) == before + unsaved)
-    page.route("**/api/players", lambda route: route.abort())
+    page.route("**/api/me", lambda route: route.abort())
     page.reload()
-    page.wait_for_function("$('player-error').textContent.includes('Could not reach')", timeout=10000)
-    check("server down at load: says so and offers Retry",
-          visible(page, "players") and page.text_content("#player-list button") == "Retry")
-    page.unroute("**/api/players")
-    page.click("#player-list button")
-    check("Retry loads the players",
-          waited(page, f"[...$('player-list').children].some((b) => b.textContent === {json.dumps(NAME)})"))
-    page.click(f"#player-list button:text-is('{NAME}')")
+    page.wait_for_function("$('signin-message').textContent.includes('Could not reach')", timeout=10000)
+    check("server down at load: Welcome says so and offers Retry", visible(page, "welcome-retry"))
+    check("...and claims neither 'Sign in with Google' nor 'sign-in isn't set up'",
+          not visible(page, "welcome-signin")
+          and not page.evaluate("getComputedStyle(document.querySelector('[data-signin-off]')).display !== 'none'"))
+    page.unroute("**/api/me")
+    page.click("#welcome-retry")
+    check("Retry finds you signed in again", waited(page, f"$('playing-as').textContent === {json.dumps('playing as ' + NAME)}"))
 
     # practice with mixed levels
     page.reload()
@@ -488,11 +584,27 @@ with sync_playwright() as p:
           and page.evaluate("!document.querySelector('#leaderboard-list img') && window.pwned === undefined"))
     page.unroute("**/api/leaderboard")
     page.keyboard.press("Escape")
-    page.route("**/api/players/*/stats", lambda route: route.fulfill(status=500, body="down"))
+    page.route("**/api/me/stats", lambda route: route.fulfill(status=500, body="down"))
     page.click("#my-stats-choice")
     check("My stats says so when it can't load", waited(page, "$('my-stats-body').textContent.includes('Could not load')"))
-    page.unroute("**/api/players/*/stats")
+    page.unroute("**/api/me/stats")
     page.keyboard.press("Escape")
+    page.focus("#leaderboard-choice")
+    page.keyboard.press("ArrowDown")
+    check("down from Leaderboard skips the hidden Sign in and reaches Account", focused() == "account-choice")
+    # signing out
+    page.click("#account-choice")
+    page.route("**/auth/signout", lambda route: route.fulfill(status=500, body="down"))
+    page.click("#sign-out")
+    page.wait_for_function("$('name-error').textContent.includes('Could not sign out')")
+    check("a failed sign-out says so and stays on Account", visible(page, "account"))
+    page.unroute("**/auth/signout")
+    page.click("#sign-out")
+    page.wait_for_selector("#welcome:not([hidden])")
+    check("Sign out goes to Welcome", visible(page, "welcome-signin"))
+    page.reload()
+    page.wait_for_selector("#welcome:not([hidden])")
+    check("and stays signed out after a reload", visible(page, "welcome"))
     check("no page errors", not errors)
     print(f"{sum(results)}/{len(results)} passed", errors or "")
     browser.close()
