@@ -4,6 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from fake_google import FakeGoogle, good_claims
+from mental import store
 from mental.engine.generate import make_question
 from mental.web import auth
 from mental.web.app import app
@@ -43,6 +44,14 @@ def sign_in(client, google, sub="google-me", name="me"):
     assert response.headers["location"] == "/"
     if name:
         assert client.put("/api/me/name", json={"name": name}).status_code == 200
+
+
+def player_count():
+    conn = store.connect()
+    try:
+        return conn.execute("SELECT COUNT(*) FROM players").fetchone()[0]
+    finally:
+        conn.close()
 
 
 def me(client):
@@ -156,8 +165,8 @@ def test_on_https_cookies_are_secure_and_host_only(google):
 
 
 def test_the_state_must_match_this_browsers_cookie(google):
-    state = start_sign_in(TestClient(app))  # started in one browser...
     for other in [TestClient(app), TestClient(app, cookies={"mental_oauth_state": "something-else"})]:
+        state = start_sign_in(TestClient(app))  # started in one browser (a fresh state each time)...
         response = finish_sign_in(other, google, state, "google-me")  # ...finished in another
         assert response.headers["location"] == "/?signin=failed"
         assert me(other)["signed_in"] is False
@@ -176,6 +185,17 @@ def test_cancelling_at_google(client):
     response = client.get("/auth/callback", params={"error": "access_denied", "state": state}, follow_redirects=False)
     assert response.headers["location"] == "/?signin=cancelled"
     assert me(client)["signed_in"] is False
+    assert player_count() == 0
+
+
+def test_other_errors_from_google_are_logged(client, caplog):
+    state = start_sign_in(client)
+    response = client.get("/auth/callback", params={"error": "invalid_request", "state": state}, follow_redirects=False)
+    assert response.headers["location"] == "/?signin=cancelled"
+    assert "invalid_request" in caplog.text
+    caplog.clear()
+    client.get("/auth/callback", params={"error": "access_denied", "state": start_sign_in(client)}, follow_redirects=False)
+    assert "access_denied" not in caplog.text
 
 
 def test_a_code_google_refuses(client):
@@ -183,6 +203,16 @@ def test_a_code_google_refuses(client):
     response = client.get("/auth/callback", params={"code": "unknown", "state": state}, follow_redirects=False)
     assert response.headers["location"] == "/?signin=failed"
     assert me(client)["signed_in"] is False
+    assert player_count() == 0
+
+
+def test_signing_in_again_ends_the_old_session(client, google):
+    sign_in(client, google)
+    old = client.cookies.get("mental_session")
+    sign_in(client, google, name=None)
+    assert client.cookies.get("mental_session") != old
+    assert me(client)["signed_in"] is True
+    assert me(TestClient(app, cookies={"mental_session": old}))["signed_in"] is False
 
 
 def test_the_same_google_account_is_the_same_player(client, google):

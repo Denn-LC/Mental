@@ -60,7 +60,7 @@ SCHEMA = [
     "CREATE INDEX IF NOT EXISTS sessions_by_player ON sessions (player_id)",
     "PRAGMA user_version = 2",
 ]
-SCHEMA_VERSION = 2  # the user_version SCHEMA sets
+SCHEMA_VERSION = 2  # must match the PRAGMA user_version that ends SCHEMA
 # v1.2's name-only players are deleted on upgrade (after a backup), as the v1.3 spec says.
 DROP_V1 = ["DROP TABLE IF EXISTS attempts", "DROP TABLE IF EXISTS rounds", "DROP TABLE IF EXISTS players"]
 SESSION_DAYS = 30
@@ -91,16 +91,35 @@ def connect(path=None):
     return conn
 
 
-def upgrade(conn, path):
-    """Bring the file to SCHEMA_VERSION. A version 1 file is backed up first, then cleared."""
-    backup_path = path.with_name(path.name + ".v1-backup")
-    # never overwrite: a second connection upgrading at the same moment must not replace a good v1 copy
-    if conn.execute("PRAGMA user_version").fetchone()[0] == 1 and not backup_path.exists():
-        backup = sqlite3.connect(backup_path)
+def backup_v1(conn, path):
+    """Write a complete copy of a version 1 file next to it, under a name no earlier backup has."""
+    temp = path.with_name(f"{path.name}.v1-backup.tmp-{secrets.token_hex(4)}")
+    try:
+        target = sqlite3.connect(temp)
         try:
-            conn.backup(backup)
+            conn.backup(target)
         finally:
-            backup.close()
+            target.close()
+        stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+        names = [f"{path.name}.v1-backup", f"{path.name}.v1-backup-{stamp}"]
+        names += [f"{path.name}.v1-backup-{stamp}-{n}" for n in range(2, 1000)]
+        for name in names:
+            final = path.with_name(name)
+            try:
+                os.link(temp, final)  # fails if the name is taken, so a backup is never overwritten
+            except FileExistsError:
+                continue
+            return final
+        raise RuntimeError("no free name for the v1 backup")
+    finally:
+        temp.unlink(missing_ok=True)
+
+
+def upgrade(conn, path):
+    """Bring the file to SCHEMA_VERSION. A version 1 file is backed up first (always a new, complete
+    backup, never replacing an older one), then cleared."""
+    if conn.execute("PRAGMA user_version").fetchone()[0] == 1:
+        backup_v1(conn, path)
     conn.execute("BEGIN IMMEDIATE")  # one connection upgrades at a time
     try:
         version = conn.execute("PRAGMA user_version").fetchone()[0]  # another may have done it meanwhile
@@ -133,7 +152,10 @@ def token_hash(token):
 def player_for_google(conn, sub):
     """The player for this Google account, made on its first sign-in (with no display name yet)."""
     with conn:
-        conn.execute("INSERT OR IGNORE INTO players (google_sub, created_at) VALUES (?, ?)", (sub, now()))
+        conn.execute(
+            "INSERT INTO players (google_sub, created_at) VALUES (?, ?) ON CONFLICT(google_sub) DO NOTHING",
+            (sub, now()),
+        )
     return dict(conn.execute("SELECT id, name FROM players WHERE google_sub = ?", (sub,)).fetchone())
 
 
@@ -170,6 +192,8 @@ def session_player(conn, token):
 
 
 def end_session(conn, token):
+    if not token:
+        return
     with conn:
         conn.execute("DELETE FROM sessions WHERE token_hash = ?", (token_hash(token),))
 
@@ -253,6 +277,7 @@ def leaderboard(conn):
     """Top 10 named players by best test score (ties alphabetical). Players with no test are left out."""
     rows = conn.execute(
         """SELECT p.id, p.name, MAX(r.score) AS best FROM rounds r JOIN players p ON p.id = r.player_id
-           WHERE r.mode = 'test' AND p.name IS NOT NULL GROUP BY p.id ORDER BY best DESC, p.name COLLATE NOCASE LIMIT 10"""
+           WHERE r.mode = 'test' AND p.name IS NOT NULL
+           GROUP BY p.id ORDER BY best DESC, p.name COLLATE NOCASE LIMIT 10"""
     )
     return [dict(row) for row in rows]

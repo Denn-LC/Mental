@@ -8,10 +8,13 @@ Google tells us nothing but a stable account id (`sub`).
 """
 import base64
 import hashlib
+import http.client
 import json
+import math
 import os
 import secrets
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
@@ -82,6 +85,21 @@ def post_form(url, fields):
         return json.load(response)
 
 
+def refusal(error):
+    """Google's `error` and `error_description` from an HTTP error reply, as ': a, b'; '' if unreadable."""
+    try:
+        body = json.load(error)
+        parts = [body[key] for key in ("error", "error_description") if isinstance(body.get(key), str)]
+        return ": " + ", ".join(parts) if parts else ""
+    except Exception:  # whatever is wrong with the body, the sign-in is already failing
+        return ""
+    finally:
+        try:
+            error.close()
+        except Exception:
+            pass
+
+
 def google_account(settings, code, verifier):
     """Trade the one-time code for the Google account id (`sub`). SignInFailed if anything is off."""
     try:
@@ -95,7 +113,10 @@ def google_account(settings, code, verifier):
         })
         payload = reply["id_token"].split(".")[1]
         claims = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
-    except (OSError, ValueError, LookupError, TypeError, AttributeError) as error:
+    except urllib.error.HTTPError as error:  # an OSError, so it must come first
+        raise SignInFailed(f"Google refused the code ({error.code}{refusal(error)})") from None
+    except (OSError, http.client.HTTPException, ValueError, LookupError, TypeError, AttributeError,
+            RecursionError) as error:
         raise SignInFailed(f"unusable reply from Google ({error!r})") from None
     if not isinstance(claims, dict):
         raise SignInFailed("unusable reply from Google")
@@ -104,7 +125,7 @@ def google_account(settings, code, verifier):
     if claims.get("aud") != settings.client_id:
         raise SignInFailed("issued for another app")
     expires = claims.get("exp")
-    if isinstance(expires, bool) or not isinstance(expires, (int, float)) or expires <= time.time():
+    if isinstance(expires, bool) or not isinstance(expires, (int, float)) or not math.isfinite(expires) or expires <= time.time():
         raise SignInFailed("expired")
     sub = claims.get("sub")
     if not isinstance(sub, str) or not 0 < len(sub) <= 255:

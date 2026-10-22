@@ -1,5 +1,8 @@
 import base64
 import hashlib
+import http.client
+import io
+import urllib.error
 from urllib.parse import parse_qs, urlparse
 
 import pytest
@@ -67,9 +70,12 @@ def test_a_good_reply_gives_the_google_account(google):
 @pytest.mark.parametrize("change", [
     {"iss": "https://elsewhere.example"}, {"aud": "another-app"}, {"exp": 1},
     {"sub": ""}, {"sub": 123}, {"sub": "x" * 256},
-], ids=["issuer", "audience", "expired", "empty-sub", "number-sub", "long-sub"])
+    {"exp": None}, {"exp": True}, {"exp": float("nan")}, {"exp": float("inf")}, {"aud": ["test-client"]},
+], ids=["issuer", "audience", "expired", "empty-sub", "number-sub", "long-sub",
+        "no-exp", "bool-exp", "nan-exp", "inf-exp", "list-aud"])
 def test_claims_that_dont_check_out_are_refused(google, change):
     google.codes["code-1"] = {**good_claims("google-123"), **change}
+    google.codes["code-1"] = {k: v for k, v in google.codes["code-1"].items() if v is not None}
     with pytest.raises(auth.SignInFailed):
         auth.google_account(SETTINGS, "code-1", "v")
 
@@ -86,3 +92,38 @@ def test_unusable_replies_are_refused(monkeypatch, reply):
 def test_a_code_google_refuses_is_refused(google):
     with pytest.raises(auth.SignInFailed):
         auth.google_account(SETTINGS, "unknown-code", "v")
+
+
+def test_the_alternative_issuer_is_accepted(google):
+    google.codes["code-1"] = {**good_claims("google-123"), "iss": "accounts.google.com"}
+    assert auth.google_account(SETTINGS, "code-1", "v") == "google-123"
+
+
+@pytest.mark.parametrize("failure", [
+    TimeoutError("timed out"), http.client.IncompleteRead(b"par"), RecursionError(),
+], ids=["timeout", "incomplete-read", "recursion"])
+def test_network_trouble_is_a_failed_sign_in(monkeypatch, failure):
+    def broken(url, fields):
+        raise failure
+    monkeypatch.setattr(auth, "post_form", broken)
+    with pytest.raises(auth.SignInFailed):
+        auth.google_account(SETTINGS, "code", "v")
+
+
+def test_googles_error_is_in_the_message(monkeypatch):
+    body = io.BytesIO(b'{"error": "invalid_grant", "error_description": "Bad Request code"}')
+
+    def refused(url, fields):
+        raise urllib.error.HTTPError(url, 400, "Bad Request", None, body)
+    monkeypatch.setattr(auth, "post_form", refused)
+    with pytest.raises(auth.SignInFailed, match="invalid_grant.*Bad Request code"):
+        auth.google_account(SETTINGS, "code", "v")
+
+
+@pytest.mark.parametrize("body", [b"not json", b"[1]", b'{"error": 5}', b""])
+def test_an_unreadable_error_body_still_fails_cleanly(monkeypatch, body):
+    def refused(url, fields):
+        raise urllib.error.HTTPError(url, 400, "bad", None, io.BytesIO(body))
+    monkeypatch.setattr(auth, "post_form", refused)
+    with pytest.raises(auth.SignInFailed):
+        auth.google_account(SETTINGS, "code", "v")

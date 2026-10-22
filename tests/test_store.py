@@ -223,12 +223,87 @@ def test_upgrading_a_v1_database_backs_it_up_and_clears_old_players(tmp_path):
     backup.close()
 
 
-def test_an_existing_backup_is_never_overwritten(tmp_path):
+def make_v1(path, extra=""):
+    old = sqlite3.connect(path)
+    old.executescript(V1_DATABASE + extra)
+    old.close()
+
+
+def test_an_existing_backup_is_kept_and_a_new_one_written(tmp_path):
     path = tmp_path / "mental.db"
     backup_path = tmp_path / "mental.db.v1-backup"
     backup_path.write_bytes(b"the first backup")
-    old = sqlite3.connect(path)
-    old.executescript(V1_DATABASE)
-    old.close()
+    make_v1(path)
     store.connect(path).close()
     assert backup_path.read_bytes() == b"the first backup"
+    [newer] = tmp_path.glob("mental.db.v1-backup-*")
+    backup = sqlite3.connect(newer)
+    assert backup.execute("SELECT name FROM players").fetchall() == [("old player",)]
+    backup.close()
+
+
+def test_an_empty_leftover_backup_does_not_skip_the_backup(tmp_path):
+    path = tmp_path / "mental.db"
+    (tmp_path / "mental.db.v1-backup").write_bytes(b"")
+    make_v1(path)
+    store.connect(path).close()
+    [real] = tmp_path.glob("mental.db.v1-backup-*")
+    backup = sqlite3.connect(real)
+    assert backup.execute("SELECT name FROM players").fetchall() == [("old player",)]
+    backup.close()
+
+
+def test_a_failed_backup_drops_nothing(tmp_path, monkeypatch):
+    path = tmp_path / "mental.db"
+    make_v1(path)
+
+    def broken(source, target):  # the backup is written to its temp file, then can't be put in place
+        raise OSError("disk full")
+
+    monkeypatch.setattr(store.os, "link", broken)
+    with pytest.raises(OSError, match="disk full"):
+        store.connect(path)
+    old = sqlite3.connect(path)
+    assert old.execute("PRAGMA user_version").fetchone()[0] == 1
+    assert old.execute("SELECT name FROM players").fetchall() == [("old player",)]
+    old.close()
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["mental.db"]
+
+
+def test_a_v1_file_with_attempts_upgrades_cleanly(tmp_path):
+    path = tmp_path / "mental.db"
+    make_v1(path, "INSERT INTO attempts VALUES (1, 1, 'q1'); PRAGMA user_version = 1;")
+    conn = store.connect(path)
+    assert conn.execute("SELECT COUNT(*) FROM attempts").fetchone()[0] == 0
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
+    conn.close()
+
+
+def test_the_schema_ends_by_setting_the_schema_version():
+    assert store.SCHEMA[-1] == f"PRAGMA user_version = {store.SCHEMA_VERSION}"
+
+
+def test_a_taken_state_is_gone_for_another_connection(tmp_path):
+    first, second = store.connect(tmp_path / "s.db"), store.connect(tmp_path / "s.db")
+    store.save_oauth_state(first, "s1", "v1")
+    assert store.take_oauth_state(first, "s1") == "v1"
+    assert store.take_oauth_state(second, "s1") is None
+    first.close()
+    second.close()
+
+
+def test_new_sessions_sweep_expired_ones(conn):
+    me = named(conn, "me")
+    old = store.create_session(conn, me)
+    with conn:
+        conn.execute("UPDATE sessions SET expires_at = ?", (LONG_AGO,))
+    store.create_session(conn, me)
+    assert conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0] == 1
+    assert store.session_player(conn, old) is None
+
+
+def test_ending_a_session_without_a_token_does_nothing(conn):
+    store.create_session(conn, named(conn, "me"))
+    store.end_session(conn, "")
+    store.end_session(conn, None)
+    assert conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0] == 1

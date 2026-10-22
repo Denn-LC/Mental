@@ -1,5 +1,6 @@
 """A stand-in for Google's token endpoint, so sign-in is tested without a network or an account."""
 import base64
+import io
 import json
 import time
 import urllib.error
@@ -28,5 +29,5 @@ class FakeGoogle:
     def __call__(self, url, fields):
         self.posts.append((url, fields))
         if fields.get("code") not in self.codes:
-            raise urllib.error.HTTPError(url, 400, "invalid_grant", None, None)
+            raise urllib.error.HTTPError(url, 400, "invalid_grant", None, io.BytesIO(b'{"error": "invalid_grant"}'))
         return {"id_token": id_token(**self.codes.pop(fields["code"]))}

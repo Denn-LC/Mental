@@ -120,6 +120,8 @@ def sign_in_callback(request: Request, conn: Database, settings: Settings,
     expected = request.cookies.get(cookie_name(settings, STATE_COOKIE), "")
     verifier = store.take_oauth_state(conn, state) if state else None  # a state works once, whatever happens next
     if error:
+        if error != "access_denied":
+            log.warning("Google sign-in came back with error %r", error[:100])
         return back_home(settings, "cancelled")
     # the state must be one we made, unused, unexpired, and started in this same browser
     if not (settings.enabled and code and verifier and secrets.compare_digest(state.encode(), expected.encode())):
@@ -131,6 +133,7 @@ def sign_in_callback(request: Request, conn: Database, settings: Settings,
         log.warning("Google sign-in failed: %s", failure)
         return back_home(settings, "failed")
     player = store.player_for_google(conn, sub)
+    store.end_session(conn, request.cookies.get(cookie_name(settings, SESSION_COOKIE)))  # not left valid after a new sign-in
     response = back_home(settings)
     set_cookie(response, settings, SESSION_COOKIE, store.create_session(conn, player["id"]),
                max_age=store.SESSION_DAYS * 24 * 60 * 60)
