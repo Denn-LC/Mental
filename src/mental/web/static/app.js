@@ -3,7 +3,7 @@
 // A finished round goes to /api/rounds, which re-checks it, saves it when someone is signed in
 // (the server knows who from the session cookie) and sends back its summary.
 //
-// Anything a person typed (a player's name) goes on the page with textContent, never innerHTML.
+// Anything a person typed (a display name) goes on the page with textContent, never innerHTML.
 
 const TEST_SECONDS = 120;
 const COUNTDOWN_MS = 700;  // per number of the 3-2-1 countdown
@@ -66,7 +66,7 @@ async function start() {
   try {
     state.me = await getJSON("/api/me");
   } catch (error) {
-    state.me = { signed_in: false, name: null, google: false };
+    state.me = { signed_in: false, name: null, google: false, unreachable: true };  // claim neither sign-in line
     renderMe();
     $("welcome-retry").hidden = false;
     return showWelcome(`Could not reach the server (${error.message}).`);
@@ -79,12 +79,11 @@ async function start() {
 
 // Shows or hides everything that depends on who is playing (see the data-* attributes in index.html).
 function renderMe() {
-  const { signed_in: member, google } = state.me;
+  const { signed_in: member, google, unreachable } = state.me;
   const shown = {
     "data-member-only": member,
-    "data-guest-only": !member,
-    "data-signin": !member && google,
-    "data-signin-off": !member && !google,
+    "data-signin": !member && google && !unreachable,
+    "data-signin-off": !member && !google && !unreachable,
   };
   for (const [attribute, visible] of Object.entries(shown)) {
     for (const element of document.querySelectorAll(`[${attribute}]`)) element.hidden = !visible;
@@ -109,8 +108,12 @@ function signIn() {
 
 async function signOut() {
   try {
-    await fetch("/auth/signout", { method: "POST" });
-  } catch {}  // if this fails the cookie may survive; the next load shows who the server thinks you are
+    const response = await fetch("/auth/signout", { method: "POST" });
+    if (!response.ok) throw new Error(`server said ${response.status}`);
+  } catch (error) {  // the session may still be live, so stay where you are rather than pretend
+    $("name-error").textContent = `Could not sign out (${error.message}).`;
+    return;
+  }
   state.me = { ...state.me, signed_in: false, name: null };
   renderMe();
   showWelcome();
@@ -237,9 +240,10 @@ function onMenuKey(event) {
 // The menu item nearest to `from` in direction [dx, dy]. An item counts only if it lies more in
 // that direction than off to the side. Null at the edge, so the highlight stays put.
 function nearestItem(from, [dx, dy]) {
-  const items = [...document.querySelectorAll(".screen:not([hidden]) [data-nav]")];
-  if (!items.includes(from)) return items[0];
   const box = (el) => (el.closest("label") || el).getBoundingClientRect();  // a tickbox's label is what you see
+  const shown = (el) => !el.hidden && (box(el).width > 0 || box(el).height > 0);  // hidden items can't be chosen
+  const items = [...document.querySelectorAll(".screen:not([hidden]) [data-nav]")].filter(shown);
+  if (!items.includes(from)) return items[0];
   const gap = (v, low, high) => Math.max(low - v, 0, v - high);  // 0 when v is within [low, high]
   const here = box(from);
   const x = here.left + here.width / 2;
@@ -552,6 +556,13 @@ async function saveRound() {
   if (state.unsaved === attempts) state.unsaved = null;
   if (session !== state.session) return;  // moved on while it saved
   setFeedback("");
+  if (!saved.saved && state.me.signed_in) {  // the session ended meanwhile: find out, so the page says so
+    try {
+      state.me = await getJSON("/api/me");
+      renderMe();
+    } catch {}
+    if (session !== state.session) return;
+  }
   showResults(saved.summary, saved.best, saved.saved);
 }
 

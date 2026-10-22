@@ -37,6 +37,7 @@ def sign_in(page, sub, name=None):
     token = store.create_session(conn, player["id"])
     conn.close()
     page.context.add_cookies([{"name": "mental_session", "value": token, "url": URL}])
+
 results, errors = [], []
 
 
@@ -93,7 +94,7 @@ FAKE_SESSION = """async (n) => {
 
 
 def saved_count(page):
-    """How many attempts the server has saved for the current player."""
+    """How many attempts the server has saved for the signed-in account."""
     return page.evaluate("""fetch('/api/me/stats').then((r) => r.json())
         .then((s) => Object.values(s.by_category).reduce((n, c) => n + c.count, 0))""")
 
@@ -102,6 +103,7 @@ with sync_playwright() as p:
     browser = p.chromium.launch(executable_path=EXE) if EXE else p.chromium.launch()
     page = browser.new_page(viewport={"width": 900, "height": 900})
     page.on("pageerror", lambda e: errors.append(str(e)))
+    page.route("https://accounts.google.com/**", lambda route: route.abort())  # a guard: no run can reach Google
     page.goto(URL)
     answer = lambda: page.evaluate("state.current.answer")
     playing = lambda: page.wait_for_function("state.current && !state.countingDown", timeout=10000)
@@ -113,7 +115,8 @@ with sync_playwright() as p:
     page.wait_for_selector("#welcome:not([hidden])")
     check("a new visitor gets Welcome: sign in with Google or play as guest",
           visible(page, "welcome-signin") and visible(page, "guest-choice") and focused() == "welcome-signin")
-    check("Welcome says guest games aren't saved", "aren't saved" in page.text_content("#welcome"))
+    check("Welcome says guest games aren't saved, where it can be seen",
+          page.get_by_text("aren't saved").first.is_visible())
     page.click("#guest-choice")
     home()
     check("Play as guest goes home as a guest, with Sign in and no Account",
@@ -126,6 +129,14 @@ with sync_playwright() as p:
     page.click("#quit")
     page.wait_for_selector("#results:not([hidden])")
     check("a guest's practice summary says it isn't saved", "not saved · sign in" in page.text_content("#results"))
+    page.keyboard.press("Escape")
+    page.click("[data-mode=test]")
+    running()
+    page.evaluate("state.testEndsAt = performance.now()")
+    page.wait_for_selector("#results:not([hidden])")
+    check("a guest's test results have no best line",
+          "score" in page.text_content("#results") and "best" not in page.text_content("#results")
+          and "not saved · sign in" in page.text_content("#results"))
     page.keyboard.press("Escape")
     page.click("#my-stats-choice")
     check("a guest's My stats asks them to sign in",
@@ -193,6 +204,17 @@ with sync_playwright() as p:
     page.press("#name-box", "Enter")
     page.wait_for_function("$('name-error').textContent !== ''")
     check("a taken name (in any case) gets a message", "taken" in page.text_content("#name-error"))
+    renamed = f"{NAME}b"
+    page.fill("#name-box", renamed)
+    page.press("#name-box", "Enter")
+    home()
+    check("a successful rename goes home, Account highlighted, showing the new name",
+          page.text_content("#playing-as") == f"playing as {renamed}" and focused() == "account-choice")
+    page.click("#account-choice")
+    page.fill("#name-box", NAME)
+    page.press("#name-box", "Enter")
+    home()
+    page.click("#account-choice")
     page.keyboard.press("Escape")
     check("Esc on Account goes home, Account highlighted", visible(page, "home") and focused() == "account-choice")
     page.focus("[data-mode=practice]")
@@ -386,6 +408,7 @@ with sync_playwright() as p:
     check(f"closing the tab on a long session still saves its first pieces ({after - before} of 400)",
           after - before >= 100 and (after - before) % 100 == 0)
     page.context.add_cookies([{"name": "mental_session", "value": "made-up", "url": URL}])
+
     page.reload()
     page.wait_for_selector("#welcome:not([hidden])")
     check("an unknown session cookie shows Welcome", visible(page, "welcome"))
@@ -510,6 +533,9 @@ with sync_playwright() as p:
     page.reload()
     page.wait_for_function("$('signin-message').textContent.includes('Could not reach')", timeout=10000)
     check("server down at load: Welcome says so and offers Retry", visible(page, "welcome-retry"))
+    check("...and claims neither 'Sign in with Google' nor 'sign-in isn't set up'",
+          not visible(page, "welcome-signin")
+          and not page.evaluate("getComputedStyle(document.querySelector('[data-signin-off]')).display !== 'none'"))
     page.unroute("**/api/me")
     page.click("#welcome-retry")
     check("Retry finds you signed in again", waited(page, f"$('playing-as').textContent === {json.dumps('playing as ' + NAME)}"))
@@ -563,8 +589,16 @@ with sync_playwright() as p:
     check("My stats says so when it can't load", waited(page, "$('my-stats-body').textContent.includes('Could not load')"))
     page.unroute("**/api/me/stats")
     page.keyboard.press("Escape")
+    page.focus("#leaderboard-choice")
+    page.keyboard.press("ArrowDown")
+    check("down from Leaderboard skips the hidden Sign in and reaches Account", focused() == "account-choice")
     # signing out
     page.click("#account-choice")
+    page.route("**/auth/signout", lambda route: route.fulfill(status=500, body="down"))
+    page.click("#sign-out")
+    page.wait_for_function("$('name-error').textContent.includes('Could not sign out')")
+    check("a failed sign-out says so and stays on Account", visible(page, "account"))
+    page.unroute("**/auth/signout")
     page.click("#sign-out")
     page.wait_for_selector("#welcome:not([hidden])")
     check("Sign out goes to Welcome", visible(page, "welcome-signin"))

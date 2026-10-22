@@ -25,11 +25,21 @@ mental reads them from environment variables, so nothing secret is in the repo:
     uv run mental
 
 Put the two `export` lines somewhere outside the repo (e.g. your shell profile) and never commit them.
-Open the app at **http://127.0.0.1:8000** (not `localhost`): Google only sends people back to the
-exact address registered above.
+Open the app at **http://127.0.0.1:8000** (not `localhost`). The sign-in cookie belongs to the
+address you opened, and Google sends you back to the registered address. Open one and come back on
+the other and the cookie is lost, so sign-in fails.
 
 ## 3. When it goes online
 
 Set `MENTAL_BASE_URL=https://<your domain>` on the server as well as the two variables above, and
 make sure that domain's redirect address is in the client's list. On `https`, mental's cookies
 become `Secure` and host-only automatically.
+
+## Before going online
+
+mental is built for running on your own machine. Before putting it on the internet:
+
+- check the `Origin` header on the POST and PUT routes;
+- rate-limit `/auth/google` and cap the number of rows in `oauth_states`;
+- sweep expired sessions periodically (today they are only removed when someone signs in);
+- make sure the server has SQLite 3.35 or newer (the code uses `RETURNING`).
